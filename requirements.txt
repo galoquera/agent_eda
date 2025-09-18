@@ -1,0 +1,17 @@
+# requirements.txt
+pandas
+matplotlib
+seaborn
+python-dotenv
+langchain
+langchain-google-genai
+langsmith
+scikit-learn
+streamlit
+pydantic
+google-generativeai
+
+# Procfile
+# Para plataformas estilo Heroku/Render/Fly.io
+# Certifique-se de que o arquivo principal do app é "agente_eda.py"
+web: streamlit run agente_eda.py --server.port $PORT --server.address 0.0.0.0
