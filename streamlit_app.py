@@ -4,8 +4,8 @@
 Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
 - Upload de CSV genérico
 - Pergunta/resposta com ferramentas (gráficos no Streamlit)
-- Memória ("mostrar_conclusoes")
-- Tools: descrição, histogramas (1 coluna e múltiplos), frequências, moda,
+- Memória interna (conclusões), exibida apenas quando o usuário pedir
+- Tools: descrição, histogramas (1 e múltiplos), frequências, moda,
   correlação, dispersão, crosstab, outliers (IQR/Z-score + resumo dataset),
   tendências temporais, k-means.
 """
@@ -13,7 +13,7 @@ Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
 import os
 import io
 import tempfile
-from typing import List  # manter simples p/ schemas
+from typing import List
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -72,14 +72,14 @@ class AgenteDeAnalise:
                 ("system",
                  "Você é um agente de EDA. Use ferramentas quando necessário.\n"
                  "- Descrição: 'descricao_geral_dados', 'estatisticas_descritivas'.\n"
-                 "- Distribuições: para UMA coluna use 'plotar_histograma'; para VÁRIAS/TODAS use 'plotar_histogramas_dataset'.\n"
+                 "- Distribuições: 1 coluna → 'plotar_histograma'; várias/todas → 'plotar_histogramas_dataset'.\n"
                  "- Tendências temporais: 'tendencias_temporais'.\n"
                  "- Relações: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada'.\n"
                  "- Outliers: 'detectar_outliers_iqr' / 'detectar_outliers_zscore' e 'resumo_outliers_dataset'.\n"
                  "- Clusters: 'kmeans_clusterizar'.\n"
                  "- Se o usuário disser apenas o nome de uma coluna, trate como foco p/ histograma/outliers.\n"
-                 "- Para 'conclusões', chame 'mostrar_conclusoes'.\n"
-                 "- Ao gerar gráfico, explique brevemente e registre em memória."),
+                 "- Conclusões: **só revele quando o usuário pedir explicitamente** (ex.: 'mostrar_conclusoes'). Caso contrário, não liste conclusões.\n"
+                 "- Ao gerar gráfico, explique brevemente e registre insight em memória."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder("agent_scratchpad"),
@@ -107,6 +107,14 @@ class AgenteDeAnalise:
             history_messages_key="chat_history",
             output_messages_key="output",
         )
+
+    # ---- Helper de memória de conclusões ----
+    def _lembrar(self, chave: str, texto: str):
+        """Guarda conclusão rica, evitando duplicatas por 'chave'."""
+        tag = f"[{chave}] "
+        item = tag + texto.strip()
+        if item not in self.memoria_analises:
+            self.memoria_analises.append(item)
 
     # ------------------------ Tools ------------------------
     def _definir_ferramentas(self):
@@ -213,14 +221,22 @@ class AgenteDeAnalise:
     def obter_descricao_geral(self) -> str:
         buffer = io.StringIO()
         self.df.info(buf=buffer)
-        txt = f"{self.df.shape[0]} linhas x {self.df.shape[1]} colunas\n\n{buffer.getvalue()}"
-        self.memoria_analises.append("Descrição geral realizada.")
-        return txt
+        linhas, colunas = self.df.shape
+        n_num = self.df.select_dtypes(include="number").shape[1]
+        n_cat = self.df.select_dtypes(exclude="number").shape[1]
+        null_pct = (self.df.isna().mean() * 100).round(2).sort_values(ascending=False)
+        top_nulls = ", ".join([f"{c}: {p}%" for c, p in null_pct.head(3).items()]) if not null_pct.empty else "sem nulos"
+        self._lembrar("descrição",
+                      f"Dataset com {linhas} linhas, {colunas} colunas ({n_num} numéricas, {n_cat} categóricas). "
+                      f"Colunas com mais nulos: {top_nulls}.")
+        return f"{linhas} linhas x {colunas} colunas\n\n{buffer.getvalue()}"
 
     def obter_estatisticas_descritivas(self) -> str:
-        txt = self.df.describe().to_string()
-        self.memoria_analises.append("Estatísticas descritivas calculadas.")
-        return txt
+        desc = self.df.describe().T
+        var_cols = desc.sort_values("std", ascending=False).head(3).index.tolist() if "std" in desc else []
+        if var_cols:
+            self._lembrar("describe", f"Maior dispersão (std): {', '.join(var_cols)}.")
+        return desc.to_string()
 
     def plotar_histograma(self, coluna: str) -> str:
         if coluna not in self.df.columns:
@@ -229,7 +245,7 @@ class AgenteDeAnalise:
         sns.histplot(self.df[coluna], kde=True, stat="density", linewidth=0, ax=ax)
         ax.set_title(f"Histograma: {coluna}"); ax.grid(True, alpha=0.3)
         st.pyplot(fig)
-        self.memoria_analises.append(f"Histograma exibido para {coluna}.")
+        self._lembrar("distribuições", f"Histograma exibido para '{coluna}'.")
         self.ultima_coluna = coluna
         return f"Histograma de '{coluna}' exibido."
 
@@ -242,7 +258,6 @@ class AgenteDeAnalise:
         if not cols:
             return "Não há colunas válidas para histograma."
         cols = cols[:max_colunas]
-
         n = len(cols)
         linhas = (n + cols_por_linha - 1) // cols_por_linha
         fig, axes = plt.subplots(linhas, cols_por_linha, figsize=(cols_por_linha*4.2, linhas*3.4))
@@ -257,7 +272,6 @@ class AgenteDeAnalise:
             except Exception as e:
                 ax.text(0.5, 0.5, f"Erro em {c}\n{e}", ha="center", va="center")
                 ax.set_axis_off()
-
         for j in range(len(cols), len(axes)):
             axes[j].set_axis_off()
 
@@ -265,7 +279,10 @@ class AgenteDeAnalise:
         plt.tight_layout()
         st.pyplot(fig)
 
-        self.memoria_analises.append(f"Histogramas exibidos para {len(cols)} coluna(s): {', '.join(cols)}.")
+        skews = self.df[cols].skew(numeric_only=True).sort_values(ascending=False)
+        mais_assim = ", ".join([f"{c}: {v:.2f}" for c, v in skews.head(3).items()])
+        menos_assim = ", ".join([f"{c}: {v:.2f}" for c, v in skews.tail(3).items()])
+        self._lembrar("distribuições", f"Maior assimetria positiva: {mais_assim}. Negativa: {menos_assim}.")
         self.ultima_coluna = cols[0]
         return f"Histogramas gerados para: {', '.join(cols)}."
 
@@ -273,31 +290,22 @@ class AgenteDeAnalise:
         if coluna not in self.df.columns:
             return f"Erro: '{coluna}' não existe."
         s = self.df[coluna].dropna()
-        partes = []
+        resumo = ""
         if pd.api.types.is_numeric_dtype(s) and s.nunique() > 50:
             try:
                 bins = pd.qcut(s, q=min(20, s.nunique()), duplicates="drop")
                 cont = bins.value_counts().sort_values(ascending=False)
-                partes.append("Numérica contínua: usando faixas (quantis).")
-                partes.append("\n-- Mais frequentes --")
-                for idx, val in cont.head(top_n).items():
-                    partes.append(f"{idx}: {val}")
-                partes.append("\n-- Menos frequentes --")
-                for idx, val in cont.tail(bottom_n).items():
-                    partes.append(f"{idx}: {val}")
+                resumo = f"Faixa mais comum: {cont.index[0]} ({int(cont.iloc[0])} ocorrências)."
             except Exception as e:
-                return f"Falha nos quantis: {e}"
+                resumo = f"Não foi possível calcular quantis ({e})."
         else:
-            cont = s.value_counts(dropna=False)
-            partes.append("\n-- Valores mais frequentes --")
-            for idx, val in cont.head(top_n).items():
-                partes.append(f"{idx}: {val}")
-            partes.append("\n-- Valores menos frequentes (não-zero) --")
-            for idx, val in cont[cont > 0].sort_values().head(bottom_n).items():
-                partes.append(f"{idx}: {val}")
-        self.memoria_analises.append(f"Frequências calculadas para '{coluna}'.")
-        self.ultima_coluna = coluna
-        return "\n".join(partes)
+            cont = s.value_counts()
+            if not cont.empty:
+                resumo = f"Valor mais comum: {cont.index[0]} ({int(cont.iloc[0])} ocorrências)."
+        if resumo:
+            self._lembrar("frequências", f"Em '{coluna}', {resumo}")
+        cont_full = s.value_counts()
+        return f"Top {top_n}:\n{cont_full.head(top_n)}\n\nBottom {bottom_n}:\n{cont_full.tail(bottom_n)}"
 
     def moda_coluna(self, coluna: str) -> str:
         if coluna not in self.df.columns:
@@ -306,7 +314,7 @@ class AgenteDeAnalise:
         if modos.empty:
             return f"Não foi possível calcular a(s) moda(s) de '{coluna}'."
         valores = ", ".join(map(str, modos.tolist()))
-        self.memoria_analises.append(f"Moda calculada para '{coluna}': {valores}")
+        self._lembrar("moda", f"Moda de '{coluna}': {valores}")
         self.ultima_coluna = coluna
         return f"Moda(s) de '{coluna}': {valores}"
 
@@ -314,11 +322,23 @@ class AgenteDeAnalise:
         df_num = self.df.select_dtypes(include="number")
         if df_num.empty:
             return "Sem colunas numéricas para correlação."
+        corr = df_num.corr().abs()
+        mask = ~corr.index.to_series().eq(corr.columns.values[:, None])
+        top = (
+            corr.where(mask)
+            .unstack()
+            .dropna()
+            .sort_values(ascending=False)
+            .drop_duplicates()
+            .head(3)
+        )
+        pares = ", ".join([f"{a}~{b}: {v:.2f}" for (a, b), v in top.items()])
+        self._lembrar("correlação", f"Pares mais correlacionados: {pares}.")
+
         fig, ax = plt.subplots(figsize=(12, 9))
         sns.heatmap(df_num.corr(), cmap="coolwarm", ax=ax)
         ax.set_title("Mapa de calor da correlação")
         st.pyplot(fig)
-        self.memoria_analises.append("Mapa de correlação exibido.")
         return "Mapa de correlação exibido."
 
     def plotar_dispersao(self, x: str, y: str, hue: str = "") -> str:
@@ -337,7 +357,7 @@ class AgenteDeAnalise:
         ax.set_title(f"Dispersão: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         ax.grid(True, linestyle="--", alpha=0.3)
         st.pyplot(fig)
-        self.memoria_analises.append(f"Dispersão exibida: {x} vs {y}.")
+        self._lembrar("dispersão", f"Dispersão exibida: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         self.ultima_coluna = y
         return "Gráfico de dispersão exibido."
 
@@ -353,7 +373,7 @@ class AgenteDeAnalise:
             ax.set_title(f"Crosstab: {linhas} x {colunas}" + (" (normalizada)" if normalizar else ""))
             ax.set_xlabel(colunas); ax.set_ylabel(linhas)
             st.pyplot(fig)
-        self.memoria_analises.append(f"Crosstab gerada: {linhas} x {colunas}.")
+        self._lembrar("crosstab", f"Crosstab gerada: {linhas} x {colunas}.")
         self.ultima_coluna = colunas
         return "Tabela cruzada exibida."
 
@@ -371,10 +391,8 @@ class AgenteDeAnalise:
         pct = (n_out / n * 100) if n else 0.0
         if plot:
             fig, ax = plt.subplots(figsize=(8, 1.8))
-            sns.boxplot(x=s, ax=ax)
-            ax.set_title(f"Boxplot {coluna} (IQR)")
-            st.pyplot(fig)
-        self.memoria_analises.append(f"IQR '{coluna}': {n_out}/{n} ({pct:.3f}%).")
+            sns.boxplot(x=s, ax=ax); ax.set_title(f"Boxplot {coluna} (IQR)"); st.pyplot(fig)
+        self._lembrar("outliers_col", f"'{coluna}': {n_out}/{n} ({pct:.2f}%) fora pelo IQR.")
         self.ultima_coluna = coluna
         return f"Outliers (IQR) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
 
@@ -396,7 +414,7 @@ class AgenteDeAnalise:
             sns.histplot(z, kde=True, stat="density", linewidth=0, ax=ax)
             ax.set_title(f"Distribuição de Z-scores - {coluna}")
             st.pyplot(fig)
-        self.memoria_analises.append(f"Z-score '{coluna}': {n_out}/{n} ({pct:.3f}%).")
+        self._lembrar("outliers_col", f"Z-score '{coluna}': {n_out}/{n} ({pct:.2f}%) com |z|>{threshold}.")
         self.ultima_coluna = coluna
         return f"Outliers (Z>|{threshold}|) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
 
@@ -406,33 +424,33 @@ class AgenteDeAnalise:
             return "Sem colunas numéricas."
         linhas = []
         for col in df_num.columns:
-            s = df_num[col].dropna()
-            n = int(s.shape[0])
+            s = df_num[col].dropna(); n = int(s.shape[0])
             if n == 0:
                 linhas.append((col, 0.0, 0, 0)); continue
             if method.lower() == "zscore":
                 mu, sigma = s.mean(), s.std(ddof=0)
                 if sigma == 0 or pd.isna(sigma):
-                    pct, cnt = 0.0, 0
+                    cnt, pct = 0, 0.0
                 else:
                     z = (s - mu) / sigma
-                    mask = z.abs() > 3.0
-                    cnt = int(mask.sum()); pct = (cnt / n * 100)
+                    cnt = int((z.abs() > 3.0).sum()); pct = (cnt / n * 100)
             else:
-                q1, q3 = s.quantile(0.25), s.quantile(0.75)
-                iqr = q3 - q1
+                q1, q3 = s.quantile(0.25), s.quantile(0.75); iqr = q3 - q1
                 low, high = q1 - 1.5*iqr, q3 + 1.5*iqr
-                mask = (s < low) | (s > high)
-                cnt = int(mask.sum()); pct = (cnt / n * 100)
+                cnt = int(((s < low) | (s > high)).sum()); pct = (cnt / n * 100)
             linhas.append((col, pct, cnt, n))
         linhas.sort(key=lambda x: x[1], reverse=True)
         top = linhas[:max(1, top_k)]
         media_pct = sum(p for _, p, _, _ in linhas) / len(linhas)
+        self._lembrar("outliers_ds",
+                      "Top outliers ({}): {}. Média geral: {:.2f}%.".format(
+                          method.upper(),
+                          ", ".join([f"{c} {p:.2f}%" for c, p, _, _ in top[:3]]),
+                          media_pct))
         partes = [f"Resumo de outliers por {method.upper()} (top {len(top)}):"]
         for col, pct, cnt, n in top:
             partes.append(f"- {col}: {cnt}/{n} = {pct:.3f}%")
-        partes.append(f"Média de % de outliers nas numéricas: {media_pct:.3f}%")
-        self.memoria_analises.append("Resumo de outliers calculado.")
+        partes.append(f"Média % outliers numéricas: {media_pct:.3f}%")
         return "\n".join(partes)
 
     def kmeans_clusterizar(self, colunas: str = "", clusters: int = 3) -> str:
@@ -444,24 +462,23 @@ class AgenteDeAnalise:
             return "k-means requer scikit-learn. Adicione 'scikit-learn' ao requirements."
         if clusters < 2:
             clusters = 2
-        cols = [c.strip() for c in colunas.split(",") if c.strip()] if colunas else self.df.select_dtypes(include="number").columns.tolist()
+        cols = [c.strip() for c in colunas.split(",") if c.strip()] or self.df.select_dtypes(include="number").columns.tolist()
         if not cols:
             return "Sem colunas numéricas para clusterização."
         X = self.df[cols].dropna()
         if X.empty:
             return "Sem linhas após remoção de NAs."
-        scaler = StandardScaler()
-        Xs = scaler.fit_transform(X)
+        scaler = StandardScaler(); Xs = scaler.fit_transform(X)
         km = KMeans(n_clusters=clusters, n_init=10, random_state=42)
         labels = km.fit_predict(Xs)
-        pca = PCA(n_components=2, random_state=42)
-        XY = pca.fit_transform(Xs)
+        sizes = pd.Series(labels).value_counts().sort_index().to_dict()
+        pca = PCA(n_components=2, random_state=42); XY = pca.fit_transform(Xs)
         fig, ax = plt.subplots(figsize=(8, 6))
-        sns.scatterplot(x=XY[:, 0], y=XY[:, 1], hue=labels, legend=True, ax=ax)
+        sns.scatterplot(x=XY[:,0], y=XY[:,1], hue=labels, legend=True, ax=ax)
         ax.set_title(f"K-means (k={clusters}) — PCA 2D"); ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.grid(True, alpha=0.3)
         st.pyplot(fig)
-        resumo = f"k-means concluído (k={clusters}) nas colunas {cols}. Inércia: {km.inertia_:.2f}."
-        self.memoria_analises.append(resumo)
+        resumo = f"k-means (k={clusters}), inércia={km.inertia_:.2f}, tamanhos={sizes}."
+        self._lembrar("clusters", resumo)
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
@@ -496,7 +513,7 @@ class AgenteDeAnalise:
             self.df["Time_bin_1h"] = bins.astype(str) + "h-" + (bins + 1).astype(str) + "h"
             created += ["Time_hour", "Time_day", "Time_bin_1h"]
         msg = f"Conversão de 'Time' {modo}. Criadas: {', '.join(created)}."
-        self.memoria_analises.append(msg)
+        self._lembrar("tempo", msg)
         return msg
 
     def tendencias_temporais(self, coluna: str, freq: str = "D") -> str:
@@ -504,29 +521,52 @@ class AgenteDeAnalise:
             return f"Erro: '{coluna}' não existe."
         if not pd.api.types.is_numeric_dtype(self.df[coluna]):
             return f"'{coluna}' deve ser numérica."
-        ts_col = None
-        if "Time_dt" in self.df.columns:
-            ts_col = "Time_dt"
-        elif "Time" in self.df.columns:
+        ts_col = "Time_dt" if "Time_dt" in self.df.columns else None
+        if not ts_col and "Time" in self.df.columns:
             self.converter_time_para_datetime(origem="1970-01-01 00:00:00", unidade="s", nova_coluna="Time_dt", criar_features=False)
             ts_col = "Time_dt"
-        else:
+        if not ts_col:
             return "Não há coluna temporal ('Time' ou 'Time_dt')."
         df_ts = self.df[[ts_col, coluna]].dropna().sort_values(ts_col).set_index(ts_col)
         series = df_ts[coluna].resample(freq).mean()
         if series.empty:
             return "Série vazia após reamostragem."
+        # slope simples (regressão linear 1D)
+        x = (series.index.view('i8') // 10**9)  # segundos
+        y = series.values
+        slope = ((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean())**2).sum()
+        direcao = "alta" if slope > 0 else "queda" if slope < 0 else "estável"
+        self._lembrar("tendência", f"{coluna} em {freq}: tendência de {direcao} (inclinação {slope:.6f}).")
+
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(series.index, series.values, label=f"mean({coluna})")
         ax.set_title(f"Tendência temporal: {coluna} por {freq}")
         ax.set_xlabel("Tempo"); ax.set_ylabel(coluna); ax.grid(True, linestyle="--", alpha=0.3); ax.legend()
         st.pyplot(fig)
-        self.memoria_analises.append(f"Tendência temporal de {coluna} ({freq}) exibida.")
         return "Tendência temporal exibida."
 
     def mostrar_conclusoes(self) -> str:
-        return "Nenhuma análise registrada." if not self.memoria_analises \
-            else "\n--- Conclusões ---\n" + "\n".join(self.memoria_analises)
+        if not self.memoria_analises:
+            return "Nenhuma análise registrada."
+        linhas = []
+        for item in self.memoria_analises:
+            if item.startswith("[") and "] " in item:
+                chave, texto = item.split("] ", 1)
+                linhas.append((chave.strip("[]"), texto))
+            else:
+                linhas.append(("geral", item))
+        linhas.sort(key=lambda x: x[0])
+        blocos, atual, buffer = [], None, []
+        for chave, texto in linhas:
+            if chave != atual:
+                if buffer:
+                    blocos.append(f"**{atual.capitalize()}**\n- " + "\n- ".join(buffer))
+                    buffer = []
+                atual = chave
+            buffer.append(texto)
+        if buffer:
+            blocos.append(f"**{atual.capitalize()}**\n- " + "\n- ".join(buffer))
+        return "\n\n".join(blocos)
 
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
@@ -537,6 +577,8 @@ class AgenteDeAnalise:
         low = t.lower()
         if any(k in low for k in ["distribuição de cada", "distribuicao de cada", "todas as variáveis", "todas variaveis", "todos histogramas", "all histograms"]):
             return "Gere histogramas de todas as colunas numéricas com 'plotar_histogramas_dataset'."
+        if "mostrar_conclusoes" in low or "conclusões" in low or "conclusoes" in low:
+            return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
         if "histograma" in low or "histogram" in low:
             if self.ultima_coluna:
                 return f"Plote histograma de '{self.ultima_coluna}' e descreva."
@@ -558,7 +600,7 @@ class AgenteDeAnalise:
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
-st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário e registra conclusões.")
+st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário. Conclusões aparecem só quando você pedir.")
 
 with st.sidebar:
     st.subheader("Upload do CSV")
@@ -602,5 +644,4 @@ if st.session_state.agente is not None:
         except Exception as e:
             st.error(str(e))
 
-    st.markdown("### Conclusões do agente")
-    st.text(agente.mostrar_conclusoes())
+# (Sem exibição automática das conclusões — elas só aparecem quando você pedir na caixa de pergunta.)
