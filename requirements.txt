@@ -20,3 +20,5 @@ streamlit==1.36.0
 
 # Evita conflitos com libs Google
 protobuf==4.25.3
+
+langchain-community==0.2.12
