@@ -60,7 +60,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -177,41 +177,41 @@ class AgenteDeAnalise:
 
         return [
             StructuredTool.from_function(self.listar_colunas, name="listar_colunas",
-                                         description="Lista as colunas do dataset."),
+                                          description="Lista as colunas do dataset."),
             StructuredTool.from_function(self.obter_descricao_geral, name="descricao_geral_dados",
-                                         description="Resumo (linhas/colunas/tipos/nulos)."),
+                                          description="Resumo (linhas/colunas/tipos/nulos)."),
             StructuredTool.from_function(self.obter_estatisticas_descritivas, name="estatisticas_descritivas",
-                                         description="Estatísticas descritivas numéricas."),
+                                          description="Estatísticas descritivas numéricas."),
             StructuredTool.from_function(self.plotar_histograma, name="plotar_histograma",
-                                         description="Histograma de uma coluna numérica.", args_schema=HistogramaInput),
+                                          description="Histograma de uma coluna numérica.", args_schema=HistogramaInput),
             StructuredTool.from_function(self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
-                                         description="Histogramas em lote (múltiplas colunas em uma única chamada).",
-                                         args_schema=HistAllInput),
+                                          description="Histogramas em lote (múltiplas colunas em uma única chamada).",
+                                          args_schema=HistAllInput),
             StructuredTool.from_function(self.frequencias_coluna, name="frequencias_coluna",
-                                         description="Top/bottom frequências (bins p/ numéricas contínuas).",
-                                         args_schema=FrequenciasInput),
+                                          description="Top/bottom frequências (bins p/ numéricas contínuas).",
+                                          args_schema=FrequenciasInput),
             StructuredTool.from_function(self.moda_coluna, name="moda_coluna",
-                                         description="Moda(s) da coluna.", args_schema=ModaInput),
+                                          description="Moda(s) da coluna.", args_schema=ModaInput),
             StructuredTool.from_function(self.mostrar_correlacao, name="plotar_mapa_correlacao",
-                                         description="Mapa de calor de correlação entre numéricas."),
+                                          description="Mapa de calor de correlação entre numéricas."),
             StructuredTool.from_function(self.plotar_dispersao, name="plotar_dispersao",
-                                         description="Dispersão X vs Y (hue opcional).", args_schema=DispersaoInput),
+                                          description="Dispersão X vs Y (hue opcional).", args_schema=DispersaoInput),
             StructuredTool.from_function(self.tabela_cruzada, name="tabela_cruzada",
-                                         description="Crosstab entre duas categóricas.", args_schema=CrosstabInput),
+                                          description="Crosstab entre duas categóricas.", args_schema=CrosstabInput),
             StructuredTool.from_function(self.detectar_outliers_iqr, name="detectar_outliers_iqr",
-                                         description="Outliers por IQR.", args_schema=OutlierIQRInput),
+                                          description="Outliers por IQR.", args_schema=OutlierIQRInput),
             StructuredTool.from_function(self.detectar_outliers_zscore, name="detectar_outliers_zscore",
-                                         description="Outliers por Z-score.", args_schema=OutlierZInput),
+                                          description="Outliers por Z-score.", args_schema=OutlierZInput),
             StructuredTool.from_function(self.resumo_outliers_dataset, name="resumo_outliers_dataset",
-                                         description="Resumo de outliers por coluna (iqr/zscore).", args_schema=ResumoOutInput),
+                                          description="Resumo de outliers por coluna (iqr/zscore).", args_schema=ResumoOutInput),
             StructuredTool.from_function(self.kmeans_clusterizar, name="kmeans_clusterizar",
-                                         description="K-means e PCA 2D.", args_schema=KMeansInput),
+                                          description="K-means e PCA 2D.", args_schema=KMeansInput),
             StructuredTool.from_function(self.converter_time_para_datetime, name="converter_time_para_datetime",
-                                         description="Converte 'Time' e cria features.", args_schema=TimeConvertInput),
+                                          description="Converte 'Time' e cria features.", args_schema=TimeConvertInput),
             StructuredTool.from_function(self.tendencias_temporais, name="tendencias_temporais",
-                                         description="Reamostra uma métrica por H/D/W/M e plota.", args_schema=TendenciasInput),
+                                          description="Reamostra uma métrica por H/D/W/M e plota.", args_schema=TendenciasInput),
             StructuredTool.from_function(self.mostrar_conclusoes, name="mostrar_conclusoes",
-                                         description="Resumo das análises realizadas."),
+                                          description="Resumo das análises realizadas."),
         ]
 
     # ---------------- Implementações ----------------
@@ -250,7 +250,7 @@ class AgenteDeAnalise:
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                   cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                     cols_por_linha: int = 3, max_colunas: int = 12) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -482,7 +482,7 @@ class AgenteDeAnalise:
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                     nova_coluna: str = "", criar_features: bool = True) -> str:
+                                       nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada."
@@ -631,17 +631,23 @@ if st.session_state.agente is not None:
 
     st.markdown("### Faça sua pergunta")
     pergunta = st.text_input("Ex.: 'Qual a distribuição de cada variável?', 'Quais variáveis mais correlacionadas?', 'mostrar_conclusoes'")
+
+    response_placeholder = st.empty()
+
     if st.button("Perguntar") and pergunta:
-        proc = agente._preprocessar_pergunta(pergunta)
-        try:
-            resposta = agente.agent.invoke(
-                {"input": proc},
-                config={"configurable": {"session_id": "ui_streamlit"},
-                        "tags": ["ui", "streamlit"], "metadata": {"origin": "ui"}},
-            )
-            st.markdown("#### Resposta")
-            st.write(resposta.get("output", resposta))
-        except Exception as e:
-            st.error(str(e))
+        with response_placeholder.container():
+            proc = agente._preprocessar_pergunta(pergunta)
+            try:
+                with st.spinner("Analisando..."):
+                    resposta = agente.agent.invoke(
+                        {"input": proc},
+                        config={"configurable": {"session_id": "ui_streamlit"},
+                                "tags": ["ui", "streamlit"], "metadata": {"origin": "ui"}},
+                    )
+                st.markdown("#### Resposta")
+                st.write(resposta.get("output", resposta))
+            except Exception as e:
+                st.error(str(e))
 
 # (Sem exibição automática das conclusões — elas só aparecem quando você pedir na caixa de pergunta.)
+
