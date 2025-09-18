@@ -1,23 +1,22 @@
-# Core
+# Núcleo
 pandas==2.2.2
 numpy==1.26.4
+scipy==1.13.1
 matplotlib==3.8.4
 seaborn==0.13.2
-scipy==1.13.1
+scikit-learn==1.5.2
 python-dotenv==1.0.1
 typing-extensions==4.12.2
 pydantic==2.7.4
 
-# LLM + LangChain/LangSmith
+# LangChain + LangSmith + Gemini
 langchain==0.2.14
 langsmith==0.1.81
-
-# Conector Gemini p/ LangChain (não fixe google-generativeai aqui)
 langchain-google-genai==1.0.6
+# (não fixe google-generativeai; deixe ser puxado pelo conector)
 
 # UI
 streamlit==1.36.0
 
 # Evita conflitos com libs Google
 protobuf==4.25.3
-
