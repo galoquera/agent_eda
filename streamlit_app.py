@@ -60,7 +60,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-1.5-pro",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -667,8 +667,9 @@ class AgenteDeAnalise:
         if "mostrar_conclusoes" in low or "conclusões" in low or "conclusoes" in low:
             return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
         
-        if any(k in low for k in ["média", "mediana", "tendencia central", "medidas de tendencia"]):
-            return "Calcule as estatísticas descritivas do dataset usando a ferramenta 'estatisticas_descritivas'."
+        # Adicionado para capturar pedidos de estatísticas centrais e de dispersão
+        if any(k in low for k in ["média", "mediana", "tendencia central", "medidas de tendencia", "variabilidade", "desvio padrão", "variância", "dispersão"]):
+            return "Calcule as estatísticas descritivas do dataset usando a ferramenta 'estatisticas_descritivas' e use o resultado para responder a pergunta."
 
         if "histograma" in low or "histogram" in low:
             if self.ultima_coluna:
@@ -792,4 +793,6 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+
+
 
