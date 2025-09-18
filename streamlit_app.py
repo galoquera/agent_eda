@@ -13,7 +13,7 @@ Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
 import os
 import io
 import tempfile
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -74,11 +74,11 @@ class AgenteDeAnalise:
                  "- Descrição: 'descricao_geral_dados', 'estatisticas_descritivas'.\n"
                  "- Distribuições: 1 coluna → 'plotar_histograma'; várias/todas → 'plotar_histogramas_dataset'.\n"
                  "- Tendências temporais: 'tendencias_temporais'.\n"
-                 "- Relações: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada'.\n"
-                 "- Outliers: 'detectar_outliers_iqr' / 'detectar_outliers_zscore' e 'resumo_outliers_dataset'.\n"
+                 "- Relações: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada', 'matriz_dispersao'.\n"
+                 "- Outliers: 'detectar_outliers_iqr' / 'zscore' / 'isolation_forest' e 'resumo_outliers_dataset'.\n"
                  "- Clusters: 'kmeans_clusterizar'.\n"
                  "- Se o usuário disser apenas o nome de uma coluna, trate como foco p/ histograma/outliers.\n"
-                 "- Conclusões: **só revele quando o usuário pedir explicitamente** (ex.: 'mostrar_conclusoes'). Caso contrário, não liste conclusões.\n"
+                 "- Conclusões: **só revele quando o usuário pedir explicitamente** (ex.: 'mostrar_conclusoes').\n"
                  "- Ao gerar gráfico, explique brevemente e registre insight em memória."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
@@ -118,7 +118,6 @@ class AgenteDeAnalise:
 
     # ------------------------ Tools ------------------------
     def _definir_ferramentas(self):
-        # SEM Optional — compatível com Gemini (evita KeyError: 'type')
         class HistogramaInput(BaseModel):
             coluna: str = Field(description="Coluna numérica para histograma.")
 
@@ -136,17 +135,29 @@ class AgenteDeAnalise:
 
         class ModaInput(BaseModel):
             coluna: str = Field(description="Coluna para calcular moda.")
+            
+        class CorrelacaoInput(BaseModel):
+            method: str = Field(default="pearson", description="Método: 'pearson', 'spearman' ou 'kendall'.")
 
         class DispersaoInput(BaseModel):
             x: str = Field(description="Coluna X (numérica).")
             y: str = Field(description="Coluna Y (numérica).")
             hue: str = Field(default="", description="Coluna categórica (opcional).")
+            amostra: int = Field(default=5000, description="Máximo de linhas amostradas para o gráfico.")
+            
+        class PairplotInput(BaseModel):
+            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, usa até 6 numéricas.")
+            hue: str = Field(default="", description="Coluna categórica para colorir.")
+            amostra: int = Field(default=3000, description="Máximo de linhas amostradas para o pairplot.")
+            corner: bool = Field(default=True, description="Se True, mostra apenas metade inferior da matriz.")
 
         class CrosstabInput(BaseModel):
             linhas: str = Field(description="Coluna para linhas (categórica).")
             colunas: str = Field(description="Coluna para colunas (categórica).")
             normalizar: bool = Field(default=True)
             heatmap: bool = Field(default=True)
+            annot: bool = Field(default=False, description="Anotar valores no heatmap (pode poluir).")
+            top_k: int = Field(default=20, description="Limita categorias por eixo para evitar tabelas gigantes.")
 
         class OutlierIQRInput(BaseModel):
             coluna: str = Field(description="Coluna numérica.")
@@ -156,6 +167,10 @@ class AgenteDeAnalise:
             coluna: str = Field(description="Coluna numérica.")
             threshold: float = Field(default=3.0)
             plot: bool = Field(default=False)
+            
+        class OutlierIFInput(BaseModel):
+            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, usa todas as numéricas.")
+            contamination: float = Field(default=0.01, description="Proporção esperada de outliers (ex.: 0.01).")
 
         class ResumoOutInput(BaseModel):
             method: str = Field(default="iqr", description="iqr ou zscore")
@@ -193,15 +208,20 @@ class AgenteDeAnalise:
             StructuredTool.from_function(self.moda_coluna, name="moda_coluna",
                                           description="Moda(s) da coluna.", args_schema=ModaInput),
             StructuredTool.from_function(self.mostrar_correlacao, name="plotar_mapa_correlacao",
-                                          description="Mapa de calor de correlação entre numéricas."),
+                                          description="Mapa de calor de correlação entre numéricas.", args_schema=CorrelacaoInput),
             StructuredTool.from_function(self.plotar_dispersao, name="plotar_dispersao",
                                           description="Dispersão X vs Y (hue opcional).", args_schema=DispersaoInput),
+            StructuredTool.from_function(self.matriz_dispersao, name="matriz_dispersao",
+                                          description="Matriz de dispersão (pairplot) para visualizar relações entre múltiplas variáveis.",
+                                          args_schema=PairplotInput),
             StructuredTool.from_function(self.tabela_cruzada, name="tabela_cruzada",
                                           description="Crosstab entre duas categóricas.", args_schema=CrosstabInput),
             StructuredTool.from_function(self.detectar_outliers_iqr, name="detectar_outliers_iqr",
                                           description="Outliers por IQR.", args_schema=OutlierIQRInput),
             StructuredTool.from_function(self.detectar_outliers_zscore, name="detectar_outliers_zscore",
                                           description="Outliers por Z-score.", args_schema=OutlierZInput),
+            StructuredTool.from_function(self.detectar_outliers_isolation_forest, name="detectar_outliers_isolation_forest",
+                                          description="Outliers por Isolation Forest (para múltiplas colunas).", args_schema=OutlierIFInput),
             StructuredTool.from_function(self.resumo_outliers_dataset, name="resumo_outliers_dataset",
                                           description="Resumo de outliers por coluna (iqr/zscore).", args_schema=ResumoOutInput),
             StructuredTool.from_function(self.kmeans_clusterizar, name="kmeans_clusterizar",
@@ -318,11 +338,11 @@ class AgenteDeAnalise:
         self.ultima_coluna = coluna
         return f"Moda(s) de '{coluna}': {valores}"
 
-    def mostrar_correlacao(self) -> str:
+    def mostrar_correlacao(self, method: str = "pearson") -> str:
         df_num = self.df.select_dtypes(include="number")
         if df_num.empty:
             return "Sem colunas numéricas para correlação."
-        corr = df_num.corr().abs()
+        corr = df_num.corr(method=method).abs()
         mask = ~corr.index.to_series().eq(corr.columns.values[:, None])
         top = (
             corr.where(mask)
@@ -333,15 +353,15 @@ class AgenteDeAnalise:
             .head(3)
         )
         pares = ", ".join([f"{a}~{b}: {v:.2f}" for (a, b), v in top.items()])
-        self._lembrar("correlação", f"Pares mais correlacionados: {pares}.")
+        self._lembrar("correlação", f"Pares mais correlacionados ({method}): {pares}.")
 
         fig, ax = plt.subplots(figsize=(12, 9))
-        sns.heatmap(df_num.corr(), cmap="coolwarm", ax=ax)
-        ax.set_title("Mapa de calor da correlação")
+        sns.heatmap(df_num.corr(method=method), cmap="coolwarm", ax=ax)
+        ax.set_title(f"Mapa de calor da correlação ({method})")
         st.pyplot(fig)
-        return "Mapa de correlação exibido."
+        return f"Mapa de correlação ({method}) exibido."
 
-    def plotar_dispersao(self, x: str, y: str, hue: str = "") -> str:
+    def plotar_dispersao(self, x: str, y: str, hue: str = "", amostra: int = 5000) -> str:
         for c in [x, y] + ([hue] if hue else []):
             if c and c not in self.df.columns:
                 return f"Erro: '{c}' não existe."
@@ -352,27 +372,66 @@ class AgenteDeAnalise:
         df_plot = df_plot.dropna(subset=[x, y])
         if df_plot.empty:
             return "Sem dados válidos após limpeza."
+        if len(df_plot) > amostra:
+            df_plot = df_plot.sample(n=amostra, random_state=42)
         fig, ax = plt.subplots(figsize=(8, 6))
-        sns.scatterplot(data=df_plot, x=x, y=y, hue=(hue if hue else None), s=20, alpha=0.7, ax=ax)
+        sns.scatterplot(data=df_plot, x=x, y=y, hue=(hue if hue else None), s=20, alpha=0.7, ax=ax, edgecolor=None)
         ax.set_title(f"Dispersão: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         ax.grid(True, linestyle="--", alpha=0.3)
         st.pyplot(fig)
         self._lembrar("dispersão", f"Dispersão exibida: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         self.ultima_coluna = y
         return "Gráfico de dispersão exibido."
+        
+    def matriz_dispersao(self, colunas: str = "", hue: str = "", amostra: int = 3000, corner: bool = True) -> str:
+        """Pairplot para múltiplas colunas (amostrado)."""
+        if colunas:
+            cols = [c.strip() for c in colunas.split(",") if c.strip()]
+        else:
+            df_num = self.df.select_dtypes(include="number")
+            if df_num.shape[1] == 0:
+                return "Não há colunas numéricas para matriz de dispersão."
+            vari = df_num.var(numeric_only=True).sort_values(ascending=False)
+            cols = vari.index.tolist()[:6]
+        
+        for c in cols + ([hue] if hue else []):
+            if c and c not in self.df.columns:
+                return f"Erro: a coluna '{c}' não existe."
+        
+        use_cols = cols + ([hue] if hue else [])
+        df_plot = self.df[use_cols].dropna()
+        if len(df_plot) > amostra:
+            df_plot = df_plot.sample(n=amostra, random_state=42)
+        
+        if len(cols) < 2:
+            return "Selecione pelo menos 2 colunas para a matriz de dispersão."
+        
+        g = sns.pairplot(df_plot, vars=cols, hue=hue if hue else None, corner=corner, diag_kind="hist", plot_kws=dict(s=15, alpha=0.7))
+        g.fig.suptitle("Matriz de Dispersão (amostrada)", y=1.02)
+        st.pyplot(g.fig)
+        msg = f"Matriz de dispersão gerada para colunas: {cols}" + (f" (hue={hue})." if hue else ".")
+        self._lembrar("dispersão", msg)
+        return msg
 
-    def tabela_cruzada(self, linhas: str, colunas: str, normalizar: bool = True, heatmap: bool = True) -> str:
+    def tabela_cruzada(self, linhas: str, colunas: str, normalizar: bool = True, heatmap: bool = True, annot: bool = False, top_k: int = 20) -> str:
         for c in [linhas, colunas]:
             if c not in self.df.columns:
                 return f"Erro: '{c}' não existe."
-        ct = pd.crosstab(self.df[linhas].astype(str), self.df[colunas].astype(str))
+                
+        s_l = self.df[linhas].astype(str); s_c = self.df[colunas].astype(str)
+        top_l = s_l.value_counts().index[:top_k]; top_c = s_c.value_counts().index[:top_k]
+        df_small = self.df[s_l.isin(top_l) & s_c.isin(top_c)]
+        ct = pd.crosstab(df_small[linhas].astype(str), df_small[colunas].astype(str))
+        
         tabela = (ct / ct.values.sum()) if normalizar else ct
+        
         if heatmap:
             fig, ax = plt.subplots(figsize=(max(6, 0.4 * len(tabela.columns)), max(4, 0.4 * len(tabela.index))))
-            sns.heatmap(tabela, cmap="Blues", ax=ax, fmt=".2f" if normalizar else "d")
+            sns.heatmap(tabela, cmap="Blues", ax=ax, annot=annot, fmt=".2f" if normalizar else "d")
             ax.set_title(f"Crosstab: {linhas} x {colunas}" + (" (normalizada)" if normalizar else ""))
             ax.set_xlabel(colunas); ax.set_ylabel(linhas)
             st.pyplot(fig)
+            
         self._lembrar("crosstab", f"Crosstab gerada: {linhas} x {colunas}.")
         self.ultima_coluna = colunas
         return "Tabela cruzada exibida."
@@ -417,6 +476,34 @@ class AgenteDeAnalise:
         self._lembrar("outliers_col", f"Z-score '{coluna}': {n_out}/{n} ({pct:.2f}%) com |z|>{threshold}.")
         self.ultima_coluna = coluna
         return f"Outliers (Z>|{threshold}|) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
+        
+    def detectar_outliers_isolation_forest(self, colunas: str = "", contamination: float = 0.01) -> str:
+        try:
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.ensemble import IsolationForest
+        except Exception:
+            return "Isolation Forest requer scikit-learn. Adicione 'scikit-learn' ao requirements."
+
+        if colunas:
+            cols = [c.strip() for c in colunas.split(",") if c.strip()]
+        else:
+            cols = self.df.select_dtypes(include="number").columns.tolist()
+
+        if not cols:
+            return "Não há colunas numéricas suficientes."
+        X = self.df[cols].dropna()
+        if X.empty:
+            return "Após remover NAs, não sobraram linhas."
+
+        scaler = StandardScaler(); Xs = scaler.fit_transform(X)
+        used_contamination = max(1e-4, min(contamination, 0.5))
+        clf = IsolationForest(contamination=used_contamination, random_state=42)
+        labels = clf.fit_predict(Xs)  # -1 = outlier
+        n_out = int((labels == -1).sum()); n = int(len(labels)); pct = (n_out / n * 100) if n else 0.0
+        msg = (f"Isolation Forest: {n_out}/{n} = {pct:.3f}% de outliers nas colunas {cols} "
+               f"(contamination={used_contamination}).")
+        self._lembrar("outliers_ds", msg)
+        return msg
 
     def resumo_outliers_dataset(self, method: str = "iqr", top_k: int = 10) -> str:
         df_num = self.df.select_dtypes(include="number")
@@ -441,7 +528,7 @@ class AgenteDeAnalise:
             linhas.append((col, pct, cnt, n))
         linhas.sort(key=lambda x: x[1], reverse=True)
         top = linhas[:max(1, top_k)]
-        media_pct = sum(p for _, p, _, _ in linhas) / len(linhas)
+        media_pct = sum(p for _, p, _, _ in linhas) / len(linhas) if linhas else 0
         self._lembrar("outliers_ds",
                       "Top outliers ({}): {}. Média geral: {:.2f}%.".format(
                           method.upper(),
@@ -580,7 +667,6 @@ class AgenteDeAnalise:
         if "mostrar_conclusoes" in low or "conclusões" in low or "conclusoes" in low:
             return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
         
-        # Adicionado para capturar pedidos de média/mediana
         if any(k in low for k in ["média", "mediana", "tendencia central", "medidas de tendencia"]):
             return "Calcule as estatísticas descritivas do dataset usando a ferramenta 'estatisticas_descritivas'."
 
@@ -595,7 +681,7 @@ class AgenteDeAnalise:
         if "outlier" in low or "atípic" in low:
             if self.ultima_coluna:
                 return f"Detecte outliers (IQR) em '{self.ultima_coluna}'."
-        if "tendên" in low or "tendenc" in low or "temporal" in low:
+        if any(k in low for k in ["tendên", "tendenc", "temporal"]):
             if "Amount" in self.df.columns:
                 return "Mostre tendências temporais de 'Amount' por dia."
         if "converter time" in low or ("time" in low and "datetime" in low):
