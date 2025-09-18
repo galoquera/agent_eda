@@ -534,7 +534,7 @@ class AgenteDeAnalise:
         # slope simples (regressão linear 1D)
         x = (series.index.view('i8') // 10**9)  # segundos
         y = series.values
-        slope = ((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean())**2).sum()
+        slope = ((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean())**2).sum() if ((x - x.mean())**2).sum() != 0 else 0
         direcao = "alta" if slope > 0 else "queda" if slope < 0 else "estável"
         self._lembrar("tendência", f"{coluna} em {freq}: tendência de {direcao} (inclinação {slope:.6f}).")
 
@@ -607,54 +607,90 @@ st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
 st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário. Conclusões aparecem só quando você pedir.")
 
-with st.sidebar:
-    st.subheader("Upload do CSV")
-    uploaded = st.file_uploader("Selecione um arquivo .csv", type=["csv"])
-
+# Inicializar o estado da sessão
 if "agente" not in st.session_state:
     st.session_state.agente = None
-    st.session_state.csv_path = None
     st.session_state.messages = []
+    st.session_state.uploaded_csv_content = None # Para persistir o conteúdo do CSV
+    st.session_state.csv_path = None
 
+with st.sidebar:
+    st.subheader("Upload do CSV")
+    uploaded = st.file_uploader("Selecione um arquivo .csv", type=["csv"], key="file_uploader")
+    st.divider()
+    modo_teste = st.toggle("Carregar CSV de teste", value=False, help="Carrega um pequeno dataset de exemplo para testar as funcionalidades sem precisar fazer upload.")
+
+# 1. Lidar com um novo upload: Se um arquivo for enviado, ele tem prioridade e seu conteúdo é salvo na sessão.
 if uploaded is not None:
-    # Reinicia o chat se um novo arquivo for enviado
+    # Se o arquivo for diferente do anterior, reinicia o estado
     if st.session_state.csv_path != uploaded.name:
-        st.session_state.messages = []
+        st.session_state.uploaded_csv_content = uploaded.getvalue()
         st.session_state.csv_path = uploaded.name
-        
-    fd, tmp_path = tempfile.mkstemp(suffix=".csv")
-    with os.fdopen(fd, "wb") as f:
-        f.write(uploaded.getbuffer())
-    
-    try:
-        st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
-        if not st.session_state.messages: # Mensagem inicial apenas uma vez
-            st.success("CSV carregado. Pronto para conversar!")
-            st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
-    except Exception as e:
-        st.error(str(e))
-        st.session_state.agente = None
+        st.session_state.agente = None # Força a reinicialização do agente
+        st.session_state.messages = [] # Limpa o histórico do chat
+        st.rerun() # Força o recarregamento para usar o novo arquivo
 
-elif not st.session_state.agente:
-    st.info("📄 Envie um CSV para começar.")
+# 2. Inicializar o agente se ele ainda não existir na sessão
+if st.session_state.agente is None:
+    # Tenta carregar a partir de um CSV já enviado e salvo na sessão
+    if st.session_state.uploaded_csv_content is not None:
+        try:
+            # Cria um arquivo temporário com o conteúdo salvo
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmpfile:
+                tmpfile.write(st.session_state.uploaded_csv_content)
+                tmp_path = tmpfile.name
 
+            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
+            if not st.session_state.messages:
+                st.success(f"CSV '{st.session_state.csv_path}' carregado. Pronto para conversar!")
+                st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
+        except Exception as e:
+            st.error(f"Erro ao recarregar o CSV: {e}")
+            st.session_state.agente = None
 
-if st.session_state.agente is not None:
+    # Se não houver CSV salvo e o modo de teste estiver ativo
+    elif modo_teste:
+        try:
+            st.sidebar.info("Modo de teste ativo. Carregando dados de exemplo.")
+            sample_data = """Time,Amount,Category,Class
+1,149.62,Electronics,0
+2,2.69,Groceries,0
+3,378.66,Travel,0
+4,12.99,Groceries,0
+5,7.00,Food,1
+6,100.00,Electronics,0
+7,50.50,Travel,1
+8,25.00,Food,0
+9,250.0,Travel,0
+10,15.99,Food,0
+"""
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode='w', encoding='utf-8') as tmpfile:
+                tmpfile.write(sample_data)
+                tmp_path = tmpfile.name
+
+            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
+            st.session_state.csv_path = "default_test_data.csv"
+            if not st.session_state.messages:
+                st.session_state.messages.append({"role": "assistant", "content": "Olá! Carreguei um dataset de exemplo para teste. O que vamos analisar?"})
+        except Exception as e:
+            st.error(f"Erro ao carregar dados de teste: {e}")
+            st.session_state.agente = None
+
+# 3. Exibir a mensagem inicial se nenhum agente foi carregado
+if st.session_state.agente is None:
+    st.info("📄 Envie um CSV ou ative o modo de teste para começar.")
+else:
+    # 4. Se o agente existe, exibe a interface de chat
     agente = st.session_state.agente
-
-    # Exibe o histórico de mensagens
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Captura a pergunta do usuário
     if prompt := st.chat_input("Faça sua pergunta sobre o dataset..."):
-        # Adiciona e exibe a mensagem do usuário
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Gera e exibe a resposta do agente
         with st.chat_message("assistant"):
             with st.spinner("Analisando..."):
                 try:
@@ -670,5 +706,4 @@ if st.session_state.agente is not None:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
-
 
