@@ -579,6 +579,11 @@ class AgenteDeAnalise:
             return "Gere histogramas de todas as colunas numéricas com 'plotar_histogramas_dataset'."
         if "mostrar_conclusoes" in low or "conclusões" in low or "conclusoes" in low:
             return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
+        
+        # Adicionado para capturar pedidos de média/mediana
+        if any(k in low for k in ["média", "mediana", "tendencia central", "medidas de tendencia"]):
+            return "Calcule as estatísticas descritivas do dataset usando a ferramenta 'estatisticas_descritivas'."
+
         if "histograma" in low or "histogram" in low:
             if self.ultima_coluna:
                 return f"Plote histograma de '{self.ultima_coluna}' e descreva."
@@ -665,4 +670,5 @@ if st.session_state.agente is not None:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+
 
