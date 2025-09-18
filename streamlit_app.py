@@ -1,19 +1,19 @@
 # streamlit_app.py
 # -*- coding: utf-8 -*-
 """
-Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith)
-Atende ao enunciado:
-- Interface de pergunta + resposta com gráficos quando aplicável
+Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
 - Upload de CSV genérico
+- Pergunta/resposta com ferramentas (gráficos no Streamlit)
 - Memória ("mostrar_conclusoes")
-- Tools: descrição, tendências temporais, frequências/moda, relações (dispersão/correlação/crosstab),
-  outliers (IQR/Z-score + resumo por dataset) e clusters (k-means)
+- Tools: descrição, histogramas (1 coluna e múltiplos), frequências, moda,
+  correlação, dispersão, crosstab, outliers (IQR/Z-score + resumo dataset),
+  tendências temporais, k-means.
 """
 
 import os
 import io
 import tempfile
-from typing import List
+from typing import List  # manter simples p/ schemas
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-# ---------- LangSmith (opcional, se estiver nas Secrets) ----------
+# ---------- LangSmith (opcional) ----------
 def _enable_langsmith(project: str = "EDA-Agent"):
     ls_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")
     if ls_key and not os.getenv("LANGCHAIN_API_KEY"):
@@ -48,12 +48,10 @@ _enable_langsmith()
 
 class AgenteDeAnalise:
     def __init__(self, caminho_arquivo_csv: str, session_id: str = "ui_streamlit"):
-        # --- API Key ---
         google_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not google_api_key:
             raise ValueError("Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas Secrets do Streamlit.")
 
-        # --- Dados ---
         if not os.path.exists(caminho_arquivo_csv):
             raise FileNotFoundError(f"Arquivo '{caminho_arquivo_csv}' não encontrado.")
         self.df = pd.read_csv(caminho_arquivo_csv)
@@ -61,30 +59,27 @@ class AgenteDeAnalise:
         self.ultima_coluna: str | None = None
         self.session_id = session_id
 
-        # --- LLM ---
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
 
-        # --- Tools ---
         tools = self._definir_ferramentas()
 
-        # --- Prompt ---
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system",
-                 "Você é um agente de EDA. Responda às perguntas do usuário usando as ferramentas quando necessário.\n"
-                 "- Descrição dos dados: use 'descricao_geral_dados' e 'estatisticas_descritivas'.\n"
-                 "- Distribuições e valores frequentes: 'plotar_histograma', 'frequencias_coluna', 'moda_coluna'.\n"
-                 "- Tendências temporais: 'tendencias_temporais' (a coluna 'Time' indica segundos desde a 1ª transação).\n"
-                 "- Relações entre variáveis: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada'.\n"
-                 "- Outliers: por coluna ('detectar_outliers_iqr' / 'detectar_outliers_zscore') e resumo geral ('resumo_outliers_dataset').\n"
-                 "- Clusters: 'kmeans_clusterizar' e explique brevemente a figura.\n"
-                 "- Se o usuário disser apenas o nome de uma coluna, considere-a como foco para histogramas/outliers.\n"
-                 "- Se ele perguntar por 'conclusões', use 'mostrar_conclusoes'.\n"
-                 "- Quando gerar gráfico, explique o que mostra e registre uma anotação em memória."),
+                 "Você é um agente de EDA. Use ferramentas quando necessário.\n"
+                 "- Descrição: 'descricao_geral_dados', 'estatisticas_descritivas'.\n"
+                 "- Distribuições: para UMA coluna use 'plotar_histograma'; para VÁRIAS/TODAS use 'plotar_histogramas_dataset'.\n"
+                 "- Tendências temporais: 'tendencias_temporais'.\n"
+                 "- Relações: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada'.\n"
+                 "- Outliers: 'detectar_outliers_iqr' / 'detectar_outliers_zscore' e 'resumo_outliers_dataset'.\n"
+                 "- Clusters: 'kmeans_clusterizar'.\n"
+                 "- Se o usuário disser apenas o nome de uma coluna, trate como foco p/ histograma/outliers.\n"
+                 "- Para 'conclusões', chame 'mostrar_conclusoes'.\n"
+                 "- Ao gerar gráfico, explique brevemente e registre em memória."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder("agent_scratchpad"),
@@ -100,7 +95,6 @@ class AgenteDeAnalise:
             handle_parsing_errors=True,
         )
 
-        # --- Memória conversacional ---
         self._store = {}
         def _get_history(session_id: str):
             if session_id not in self._store:
@@ -108,8 +102,7 @@ class AgenteDeAnalise:
             return self._store[session_id]
 
         self.agent = RunnableWithMessageHistory(
-            self.base_executor,
-            _get_history,
+            self.base_executor, _get_history,
             input_messages_key="input",
             history_messages_key="chat_history",
             output_messages_key="output",
@@ -117,9 +110,16 @@ class AgenteDeAnalise:
 
     # ------------------------ Tools ------------------------
     def _definir_ferramentas(self):
-        # IMPORTANTe: sem Optional nos schemas (compatível com Gemini tool-calling)
+        # SEM Optional — compatível com Gemini (evita KeyError: 'type')
         class HistogramaInput(BaseModel):
             coluna: str = Field(description="Coluna numérica para histograma.")
+
+        class HistAllInput(BaseModel):
+            colunas: str = Field(default="", description="Lista separada por vírgula (vazio = todas numéricas).")
+            kde: bool = Field(default=True, description="Exibir curva KDE.")
+            bins: int = Field(default=30, description="Número de bins.")
+            cols_por_linha: int = Field(default=3, description="Gráficos por linha.")
+            max_colunas: int = Field(default=12, description="Limite superior de colunas plotadas.")
 
         class FrequenciasInput(BaseModel):
             coluna: str = Field(description="Coluna para frequências top/bottom.")
@@ -132,7 +132,7 @@ class AgenteDeAnalise:
         class DispersaoInput(BaseModel):
             x: str = Field(description="Coluna X (numérica).")
             y: str = Field(description="Coluna Y (numérica).")
-            hue: str = Field(default="", description="Coluna categórica para colorir (opcional).")
+            hue: str = Field(default="", description="Coluna categórica (opcional).")
 
         class CrosstabInput(BaseModel):
             linhas: str = Field(description="Coluna para linhas (categórica).")
@@ -155,7 +155,7 @@ class AgenteDeAnalise:
 
         class KMeansInput(BaseModel):
             colunas: str = Field(default="", description="Lista separada por vírgula (vazio = numéricas).")
-            clusters: int = Field(default=3, description="k (min 2)")
+            clusters: int = Field(default=3, description="k (mín. 2)")
 
         class TimeConvertInput(BaseModel):
             origem: str = Field(default="", description="YYYY-MM-DD HH:MM:SS (vazio = relativo).")
@@ -176,8 +176,12 @@ class AgenteDeAnalise:
                                          description="Estatísticas descritivas numéricas."),
             StructuredTool.from_function(self.plotar_histograma, name="plotar_histograma",
                                          description="Histograma de uma coluna numérica.", args_schema=HistogramaInput),
+            StructuredTool.from_function(self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
+                                         description="Histogramas em lote (múltiplas colunas em uma única chamada).",
+                                         args_schema=HistAllInput),
             StructuredTool.from_function(self.frequencias_coluna, name="frequencias_coluna",
-                                         description="Top/bottom frequências (bins para numéricas contínuas).", args_schema=FrequenciasInput),
+                                         description="Top/bottom frequências (bins p/ numéricas contínuas).",
+                                         args_schema=FrequenciasInput),
             StructuredTool.from_function(self.moda_coluna, name="moda_coluna",
                                          description="Moda(s) da coluna.", args_schema=ModaInput),
             StructuredTool.from_function(self.mostrar_correlacao, name="plotar_mapa_correlacao",
@@ -193,13 +197,13 @@ class AgenteDeAnalise:
             StructuredTool.from_function(self.resumo_outliers_dataset, name="resumo_outliers_dataset",
                                          description="Resumo de outliers por coluna (iqr/zscore).", args_schema=ResumoOutInput),
             StructuredTool.from_function(self.kmeans_clusterizar, name="kmeans_clusterizar",
-                                         description="K-means e projeção PCA 2D.", args_schema=KMeansInput),
+                                         description="K-means e PCA 2D.", args_schema=KMeansInput),
             StructuredTool.from_function(self.converter_time_para_datetime, name="converter_time_para_datetime",
                                          description="Converte 'Time' e cria features.", args_schema=TimeConvertInput),
             StructuredTool.from_function(self.tendencias_temporais, name="tendencias_temporais",
                                          description="Reamostra uma métrica por H/D/W/M e plota.", args_schema=TendenciasInput),
             StructuredTool.from_function(self.mostrar_conclusoes, name="mostrar_conclusoes",
-                                         description="Resumo das análises realizadas até agora."),
+                                         description="Resumo das análises realizadas."),
         ]
 
     # ---------------- Implementações ----------------
@@ -228,6 +232,42 @@ class AgenteDeAnalise:
         self.memoria_analises.append(f"Histograma exibido para {coluna}.")
         self.ultima_coluna = coluna
         return f"Histograma de '{coluna}' exibido."
+
+    def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
+                                   cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+        if colunas.strip():
+            cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
+        else:
+            cols = self.df.select_dtypes(include="number").columns.tolist()
+        if not cols:
+            return "Não há colunas válidas para histograma."
+        cols = cols[:max_colunas]
+
+        n = len(cols)
+        linhas = (n + cols_por_linha - 1) // cols_por_linha
+        fig, axes = plt.subplots(linhas, cols_por_linha, figsize=(cols_por_linha*4.2, linhas*3.4))
+        axes = axes.flatten() if n > 1 else [axes]
+
+        for i, c in enumerate(cols):
+            ax = axes[i]
+            try:
+                sns.histplot(self.df[c].dropna(), kde=kde, bins=bins, stat="density", linewidth=0, ax=ax)
+                ax.set_title(c)
+                ax.grid(True, alpha=0.25)
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Erro em {c}\n{e}", ha="center", va="center")
+                ax.set_axis_off()
+
+        for j in range(len(cols), len(axes)):
+            axes[j].set_axis_off()
+
+        fig.suptitle("Distribuição das variáveis (histogramas)", y=0.99)
+        plt.tight_layout()
+        st.pyplot(fig)
+
+        self.memoria_analises.append(f"Histogramas exibidos para {len(cols)} coluna(s): {', '.join(cols)}.")
+        self.ultima_coluna = cols[0]
+        return f"Histogramas gerados para: {', '.join(cols)}."
 
     def frequencias_coluna(self, coluna: str, top_n: int = 10, bottom_n: int = 10) -> str:
         if coluna not in self.df.columns:
@@ -325,7 +365,7 @@ class AgenteDeAnalise:
             return f"'{coluna}' não é numérica."
         q1, q3 = s.quantile(0.25), s.quantile(0.75)
         iqr = q3 - q1
-        low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        low, high = q1 - 1.5*iqr, q3 + 1.5*iqr
         mask = (s < low) | (s > high)
         n_out, n = int(mask.sum()), int(s.shape[0])
         pct = (n_out / n * 100) if n else 0.0
@@ -381,7 +421,7 @@ class AgenteDeAnalise:
             else:
                 q1, q3 = s.quantile(0.25), s.quantile(0.75)
                 iqr = q3 - q1
-                low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                low, high = q1 - 1.5*iqr, q3 + 1.5*iqr
                 mask = (s < low) | (s > high)
                 cnt = int(mask.sum()); pct = (cnt / n * 100)
             linhas.append((col, pct, cnt, n))
@@ -401,7 +441,7 @@ class AgenteDeAnalise:
             from sklearn.cluster import KMeans
             from sklearn.decomposition import PCA
         except Exception:
-            return "k-means requer scikit-learn. Instale 'scikit-learn' no requirements."
+            return "k-means requer scikit-learn. Adicione 'scikit-learn' ao requirements."
         if clusters < 2:
             clusters = 2
         cols = [c.strip() for c in colunas.split(",") if c.strip()] if colunas else self.df.select_dtypes(include="number").columns.tolist()
@@ -488,14 +528,16 @@ class AgenteDeAnalise:
         return "Nenhuma análise registrada." if not self.memoria_analises \
             else "\n--- Conclusões ---\n" + "\n".join(self.memoria_analises)
 
-    # Pré-processamento leve (ajuda o agente a usar a última coluna)
+    # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
         t = pergunta.strip()
         if t in self.df.columns:
             self.ultima_coluna = t
             return f"Use a coluna '{t}' como foco: gere um histograma e calcule outliers por IQR."
         low = t.lower()
-        if "histogram" in low or "histograma" in low:
+        if any(k in low for k in ["distribuição de cada", "distribuicao de cada", "todas as variáveis", "todas variaveis", "todos histogramas", "all histograms"]):
+            return "Gere histogramas de todas as colunas numéricas com 'plotar_histogramas_dataset'."
+        if "histograma" in low or "histogram" in low:
             if self.ultima_coluna:
                 return f"Plote histograma de '{self.ultima_coluna}' e descreva."
         if "frequenc" in low or "frequênc" in low:
@@ -510,13 +552,13 @@ class AgenteDeAnalise:
             if "Amount" in self.df.columns:
                 return "Mostre tendências temporais de 'Amount' por dia."
         if "converter time" in low or ("time" in low and "datetime" in low):
-            return "Converta 'Time' para datetime (s) e crie features."
+            return "Converta 'Time' para datetime (segundos) e crie features."
         return pergunta
 
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
-st.caption("Faça upload de um CSV e pergunte ao agente. Ele pode gerar gráficos e registrar conclusões.")
+st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário e registra conclusões.")
 
 with st.sidebar:
     st.subheader("Upload do CSV")
@@ -546,7 +588,7 @@ if st.session_state.agente is not None:
     agente = st.session_state.agente
 
     st.markdown("### Faça sua pergunta")
-    pergunta = st.text_input("Ex.: 'Quais variáveis estão mais correlacionadas?', 'Gerar clusters k=3', 'mostrar_conclusoes'")
+    pergunta = st.text_input("Ex.: 'Qual a distribuição de cada variável?', 'Quais variáveis mais correlacionadas?', 'mostrar_conclusoes'")
     if st.button("Perguntar") and pergunta:
         proc = agente._preprocessar_pergunta(pergunta)
         try:
