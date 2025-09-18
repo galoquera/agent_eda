@@ -3,7 +3,7 @@
 """
 App Streamlit (somente UI) — Agente EDA com LangChain + Gemini (+ LangSmith)
 - Upload dinâmico de CSV
-- Ferramentas principais de EDA + tendências temporais
+- Ferramentas de EDA + tendências temporais (H/D/W/M + rolling)
 - Memória conversacional (RunnableWithMessageHistory)
 """
 
@@ -26,7 +26,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-# (Opcional) LangSmith — será habilitado automaticamente se LANGSMITH_API_KEY estiver em Secrets
+# (Opcional) LangSmith — habilita tracing se LANGSMITH_API_KEY estiver nas Secrets
 def _enable_langsmith(project: str = "EDA-Agent"):
     ls_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")
     if ls_key and not os.getenv("LANGCHAIN_API_KEY"):
@@ -40,7 +40,6 @@ def _enable_langsmith(project: str = "EDA-Agent"):
 
 load_dotenv()
 _enable_langsmith()
-
 
 # -------------------------------------------------------------
 # Agente
@@ -119,145 +118,144 @@ class AgenteDeAnalise:
     # -------------------------
     # Definição das ferramentas
     # -------------------------
-   def _definir_ferramentas(self):
-    class HistogramaInput(BaseModel):
-        coluna: str = Field(description="Coluna numérica para histograma.")
+    def _definir_ferramentas(self):
+        class HistogramaInput(BaseModel):
+            coluna: str = Field(description="Coluna numérica para histograma.")
 
-    class FrequenciasInput(BaseModel):
-        coluna: str = Field(description="Coluna para calcular frequências.")
-        top_n: int = Field(default=10)
-        bottom_n: int = Field(default=10)
+        class FrequenciasInput(BaseModel):
+            coluna: str = Field(description="Coluna para calcular frequências.")
+            top_n: int = Field(default=10)
+            bottom_n: int = Field(default=10)
 
-    class ModaInput(BaseModel):
-        coluna: str = Field(description="Coluna (qualquer tipo) para a(s) moda(s).")
+        class ModaInput(BaseModel):
+            coluna: str = Field(description="Coluna (qualquer tipo) para a(s) moda(s).")
 
-    class DispersaoInput(BaseModel):
-        x: str = Field(description="Coluna X (numérica).")
-        y: str = Field(description="Coluna Y (numérica).")
-        hue: Optional[str] = Field(default=None, description="Categórica para colorir.")
+        class DispersaoInput(BaseModel):
+            x: str = Field(description="Coluna X (numérica).")
+            y: str = Field(description="Coluna Y (numérica).")
+            hue: Optional[str] = Field(default=None, description="Categórica para colorir.")
 
-    class PairplotInput(BaseModel):
-        colunas: Optional[str] = Field(default=None, description="Lista separada por vírgula. Se vazio, escolhe até 6 numéricas.")
-        hue: Optional[str] = Field(default=None)
+        class PairplotInput(BaseModel):
+            colunas: Optional[str] = Field(default=None, description="Lista separada por vírgula. Se vazio, escolhe até 6 numéricas.")
+            hue: Optional[str] = Field(default=None)
 
-    class CrosstabInput(BaseModel):
-        linhas: str = Field(description="Coluna para linhas (categórica).")
-        colunas: str = Field(description="Coluna para colunas (categórica).")
-        normalizar: bool = Field(default=True)
-        heatmap: bool = Field(default=True)
+        class CrosstabInput(BaseModel):
+            linhas: str = Field(description="Coluna para linhas (categórica).")
+            colunas: str = Field(description="Coluna para colunas (categórica).")
+            normalizar: bool = Field(default=True)
+            heatmap: bool = Field(default=True)
 
-    class OutlierIQRInput(BaseModel):
-        coluna: str = Field(description="Coluna numérica.")
-        plot: bool = Field(default=False)
+        class OutlierIQRInput(BaseModel):
+            coluna: str = Field(description="Coluna numérica.")
+            plot: bool = Field(default=False)
 
-    class OutlierZInput(BaseModel):
-        coluna: str = Field(description="Coluna numérica.")
-        threshold: float = Field(default=3.0)
-        plot: bool = Field(default=False)
+        class OutlierZInput(BaseModel):
+            coluna: str = Field(description="Coluna numérica.")
+            threshold: float = Field(default=3.0)
+            plot: bool = Field(default=False)
 
-    class TimeConvertInput(BaseModel):
-        origem: Optional[str] = Field(default=None, description="YYYY-MM-DD HH:MM:SS")
-        unidade: str = Field(default="s")
-        nova_coluna: Optional[str] = Field(default=None)
-        criar_features: bool = Field(default=True)
+        class TimeConvertInput(BaseModel):
+            origem: Optional[str] = Field(default=None, description="YYYY-MM-DD HH:MM:SS")
+            unidade: str = Field(default="s")
+            nova_coluna: Optional[str] = Field(default=None)
+            criar_features: bool = Field(default=True)
 
-    class TendenciasInput(BaseModel):
-        coluna_valor: str = Field(description="Coluna numérica (ex.: Amount).")
-        freq: str = Field(default="D", description="H/D/W/M")
-        agg: str = Field(default="sum", description="sum/mean/median/count/max/min")
-        timestamp_col: Optional[str] = Field(default=None)
-        origem: Optional[str] = Field(default=None)
-        unidade: str = Field(default="s")
-        rolling: Optional[int] = Field(default=None)
+        class TendenciasInput(BaseModel):
+            coluna_valor: str = Field(description="Coluna numérica (ex.: Amount).")
+            freq: str = Field(default="D", description="H/D/W/M")
+            agg: str = Field(default="sum", description="sum/mean/median/count/max/min")
+            timestamp_col: Optional[str] = Field(default=None)
+            origem: Optional[str] = Field(default=None)
+            unidade: str = Field(default="s")
+            rolling: Optional[int] = Field(default=None)
 
-    return [
-        StructuredTool.from_function(
-            func=self.listar_colunas,
-            name="listar_colunas",
-            description="Lista as colunas do dataset.",
-        ),
-        StructuredTool.from_function(
-            func=self.obter_descricao_geral,
-            name="descricao_geral_dados",
-            description="Resumo: linhas, colunas, tipos e nulos.",
-        ),
-        StructuredTool.from_function(
-            func=self.obter_estatisticas_descritivas,
-            name="estatisticas_descritivas",
-            description="Describe numérico.",
-        ),
-        StructuredTool.from_function(
-            func=self.plotar_histograma,
-            name="plotar_histograma",
-            description="Histograma de uma coluna numérica.",
-            args_schema=HistogramaInput,
-        ),
-        StructuredTool.from_function(
-            func=self.mostrar_correlacao,
-            name="plotar_mapa_correlacao",
-            description="Mapa de calor de correlação.",
-        ),
-        StructuredTool.from_function(
-            func=self.frequencias_coluna,
-            name="frequencias_coluna",
-            description="Frequências top/bottom.",
-            args_schema=FrequenciasInput,
-        ),
-        StructuredTool.from_function(
-            func=self.moda_coluna,
-            name="moda_coluna",
-            description="Moda(s) da coluna.",
-            args_schema=ModaInput,
-        ),
-        StructuredTool.from_function(
-            func=self.plotar_dispersao,
-            name="plotar_dispersao",
-            description="Dispersão X vs Y.",
-            args_schema=DispersaoInput,
-        ),
-        StructuredTool.from_function(
-            func=self.matriz_dispersao,
-            name="matriz_dispersao",
-            description="Pairplot de colunas.",
-            args_schema=PairplotInput,
-        ),
-        StructuredTool.from_function(
-            func=self.tabela_cruzada,
-            name="tabela_cruzada",
-            description="Crosstab entre duas categóricas.",
-            args_schema=CrosstabInput,
-        ),
-        StructuredTool.from_function(
-            func=self.detectar_outliers_iqr,
-            name="detectar_outliers_iqr",
-            description="Outliers por IQR.",
-            args_schema=OutlierIQRInput,
-        ),
-        StructuredTool.from_function(
-            func=self.detectar_outliers_zscore,
-            name="detectar_outliers_zscore",
-            description="Outliers por Z-score.",
-            args_schema=OutlierZInput,
-        ),
-        StructuredTool.from_function(
-            func=self.converter_time_para_datetime,
-            name="converter_time_para_datetime",
-            description="Converte 'Time' p/ datetime e cria features.",
-            args_schema=TimeConvertInput,
-        ),
-        StructuredTool.from_function(
-            func=self.tendencias_temporais,
-            name="tendencias_temporais",
-            description="Reamostra série temporal e plota.",
-            args_schema=TendenciasInput,
-        ),
-        StructuredTool.from_function(
-            func=self.mostrar_conclusoes,
-            name="mostrar_conclusoes",
-            description="Mostra memória de análises.",
-        ),
-    ]
-
+        return [
+            StructuredTool.from_function(
+                func=self.listar_colunas,
+                name="listar_colunas",
+                description="Lista as colunas do dataset.",
+            ),
+            StructuredTool.from_function(
+                func=self.obter_descricao_geral,
+                name="descricao_geral_dados",
+                description="Resumo: linhas, colunas, tipos e nulos.",
+            ),
+            StructuredTool.from_function(
+                func=self.obter_estatisticas_descritivas,
+                name="estatisticas_descritivas",
+                description="Describe numérico.",
+            ),
+            StructuredTool.from_function(
+                func=self.plotar_histograma,
+                name="plotar_histograma",
+                description="Histograma de uma coluna numérica.",
+                args_schema=HistogramaInput,
+            ),
+            StructuredTool.from_function(
+                func=self.mostrar_correlacao,
+                name="plotar_mapa_correlacao",
+                description="Mapa de calor de correlação.",
+            ),
+            StructuredTool.from_function(
+                func=self.frequencias_coluna,
+                name="frequencias_coluna",
+                description="Frequências top/bottom.",
+                args_schema=FrequenciasInput,
+            ),
+            StructuredTool.from_function(
+                func=self.moda_coluna,
+                name="moda_coluna",
+                description="Moda(s) da coluna.",
+                args_schema=ModaInput,
+            ),
+            StructuredTool.from_function(
+                func=self.plotar_dispersao,
+                name="plotar_dispersao",
+                description="Dispersão X vs Y.",
+                args_schema=DispersaoInput,
+            ),
+            StructuredTool.from_function(
+                func=self.matriz_dispersao,
+                name="matriz_dispersao",
+                description="Pairplot de colunas.",
+                args_schema=PairplotInput,
+            ),
+            StructuredTool.from_function(
+                func=self.tabela_cruzada,
+                name="tabela_cruzada",
+                description="Crosstab entre duas categóricas.",
+                args_schema=CrosstabInput,
+            ),
+            StructuredTool.from_function(
+                func=self.detectar_outliers_iqr,
+                name="detectar_outliers_iqr",
+                description="Outliers por IQR.",
+                args_schema=OutlierIQRInput,
+            ),
+            StructuredTool.from_function(
+                func=self.detectar_outliers_zscore,
+                name="detectar_outliers_zscore",
+                description="Outliers por Z-score.",
+                args_schema=OutlierZInput,
+            ),
+            StructuredTool.from_function(
+                func=self.converter_time_para_datetime,
+                name="converter_time_para_datetime",
+                description="Converte 'Time' p/ datetime e cria features.",
+                args_schema=TimeConvertInput,
+            ),
+            StructuredTool.from_function(
+                func=self.tendencias_temporais,
+                name="tendencias_temporais",
+                description="Reamostra série temporal e plota.",
+                args_schema=TendenciasInput,
+            ),
+            StructuredTool.from_function(
+                func=self.mostrar_conclusoes,
+                name="mostrar_conclusoes",
+                description="Mostra memória de análises.",
+            ),
+        ]
 
     # -------------------------
     # Ferramentas (implementação)
@@ -542,7 +540,6 @@ class AgenteDeAnalise:
             return "Converta 'Time' para datetime (segundos) e crie features."
         return pergunta
 
-
 # -------------------------------------------------------------
 # UI Streamlit
 # -------------------------------------------------------------
@@ -583,9 +580,11 @@ if st.session_state.agente is not None:
         try:
             resposta = agente.agent.invoke(
                 {"input": proc},
-                config={"configurable": {"session_id": "ui_streamlit"},
-                        "tags": ["ui", "streamlit"],
-                        "metadata": {"origin": "ui"}},
+                config={
+                    "configurable": {"session_id": "ui_streamlit"},
+                    "tags": ["ui", "streamlit"],
+                    "metadata": {"origin": "ui"},
+                },
             )
             st.markdown("#### Resposta")
             st.write(resposta.get("output", resposta))
@@ -620,4 +619,3 @@ if st.session_state.agente is not None:
 
     st.markdown("### Conclusões acumuladas")
     st.text(agente.mostrar_conclusoes())
-
