@@ -67,19 +67,30 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
+        # --- PROMPT DE SISTEMA REVISADO ---
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system",
-                 "Você é um agente de EDA. Use ferramentas quando necessário.\n"
-                 "- Descrição: 'descricao_geral_dados', 'estatisticas_descritivas'.\n"
-                 "- Distribuições: 1 coluna → 'plotar_histograma'; várias/todas → 'plotar_histogramas_dataset'.\n"
-                 "- Tendências temporais: 'tendencias_temporais'.\n"
-                 "- Relações: 'plotar_mapa_correlacao', 'plotar_dispersao', 'tabela_cruzada', 'matriz_dispersao'.\n"
-                 "- Outliers: 'detectar_outliers_iqr' / 'zscore' / 'isolation_forest' e 'resumo_outliers_dataset'.\n"
-                 "- Clusters: 'kmeans_clusterizar'.\n"
-                 "- Se o usuário disser apenas o nome de uma coluna, trate como foco p/ histograma/outliers.\n"
-                 "- Conclusões: **só revele quando o usuário pedir explicitamente** (ex.: 'mostrar_conclusoes').\n"
-                 "- Ao gerar gráfico, explique brevemente e registre insight em memória."),
+                 "Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA). "
+                 "Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.\n\n"
+                 
+                 "**Princípios de Operação:**\n"
+                 "1.  **Pense Passo a Passo:** Antes de responder, analise a pergunta. Qual é a real intenção? Qual ferramenta é a mais adequada? "
+                 "Após gerar um resultado, interprete-o brevemente, destacando um ou dois insights importantes.\n"
+                 "2.  **Seja Proativo e Conciso:** Se gerar um histograma, comente a assimetria. Se gerar correlação, aponte os pares mais fortes.\n"
+                 "3.  **Use o Contexto:** O histórico da conversa é crucial. Se uma pergunta for vaga como 'e os outliers?', use a última coluna mencionada como foco.\n"
+                 "4.  **Peça Esclarecimentos com Moderação:** Só peça mais informações se a pergunta for extremamente ambígua e o contexto não ajudar.\n"
+                 "5.  **Mantenha a Memória:** Lembre-se de registrar suas conclusões na memória interna para consulta com 'mostrar_conclusoes'.\n\n"
+
+                 "**Guia de Ferramentas:**\n"
+                 "- **Para Entender a Estrutura:** Use `descricao_geral_dados`, `listar_colunas`.\n"
+                 "- **Para Medidas Resumo:** Use `estatisticas_descritivas` para perguntas sobre média, mediana, desvio padrão, variância, quartis e outras medidas de tendência central ou dispersão.\n"
+                 "- **Para Distribuições e Frequências:** `plotar_histograma` (uma coluna), `plotar_histogramas_dataset` (várias), `frequencias_coluna`, `moda_coluna`.\n"
+                 "- **Para Relações Entre Variáveis:** `plotar_mapa_correlacao`, `plotar_dispersao` (duas vars), `matriz_dispersao` (múltiplas vars), `tabela_cruzada` (categóricas).\n"
+                 "- **Para Análise de Anomalias (Outliers):** `detectar_outliers_iqr` ou `zscore` (uma coluna), `isolation_forest` (multivariada), `resumo_outliers_dataset` (geral).\n"
+                 "- **Para Análise Temporal:** `converter_time_para_datetime` e `tendencias_temporais`.\n"
+                 "- **Para Segmentação:** `kmeans_clusterizar` para agrupar dados."
+                ),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder("agent_scratchpad"),
@@ -657,36 +668,19 @@ class AgenteDeAnalise:
 
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
+        # Simplificado, pois o prompt principal é mais robusto agora.
+        # Mantido para atalhos convenientes.
         t = pergunta.strip()
         if t in self.df.columns:
             self.ultima_coluna = t
-            return f"Use a coluna '{t}' como foco: gere um histograma e calcule outliers por IQR."
-        low = t.lower()
-        if any(k in low for k in ["distribuição de cada", "distribuicao de cada", "todas as variáveis", "todas variaveis", "todos histogramas", "all histograms"]):
-            return "Gere histogramas de todas as colunas numéricas com 'plotar_histogramas_dataset'."
-        if "mostrar_conclusoes" in low or "conclusões" in low or "conclusoes" in low:
-            return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
+            return f"Analise a coluna '{t}': gere um histograma e verifique outliers com IQR."
         
-        # Adicionado para capturar pedidos de estatísticas centrais e de dispersão
-        if any(k in low for k in ["média", "mediana", "tendencia central", "medidas de tendencia", "variabilidade", "desvio padrão", "variância", "dispersão"]):
-            return "Calcule as estatísticas descritivas do dataset usando a ferramenta 'estatisticas_descritivas' e use o resultado para responder a pergunta."
+        low = t.lower()
+        if "mostrar conclus" in low or "quais as conclus" in low:
+             return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
 
-        if "histograma" in low or "histogram" in low:
-            if self.ultima_coluna:
-                return f"Plote histograma de '{self.ultima_coluna}' e descreva."
-        if "frequenc" in low or "frequênc" in low:
-            if self.ultima_coluna:
-                return f"Mostre frequências (top/bottom) de '{self.ultima_coluna}'."
-        if "moda" in low and self.ultima_coluna:
-            return f"Calcule a moda de '{self.ultima_coluna}'."
-        if "outlier" in low or "atípic" in low:
-            if self.ultima_coluna:
-                return f"Detecte outliers (IQR) em '{self.ultima_coluna}'."
-        if any(k in low for k in ["tendên", "tendenc", "temporal"]):
-            if "Amount" in self.df.columns:
-                return "Mostre tendências temporais de 'Amount' por dia."
-        if "converter time" in low or ("time" in low and "datetime" in low):
-            return "Converta 'Time' para datetime (segundos) e crie features."
+        # O prompt do sistema agora lida com a maioria dos casos de linguagem natural.
+        # Esta função fica como um otimizador para casos muito diretos.
         return pergunta
 
 # ========================= UI Streamlit =========================
@@ -705,7 +699,6 @@ with st.sidebar:
     st.subheader("Upload do CSV")
     uploaded = st.file_uploader("Selecione um arquivo .csv", type=["csv"], key="file_uploader")
     st.divider()
-    modo_teste = st.toggle("Carregar CSV de teste", value=False, help="Carrega um pequeno dataset de exemplo para testar as funcionalidades sem precisar fazer upload.")
 
 # 1. Lidar com um novo upload: Se um arquivo for enviado, ele tem prioridade e seu conteúdo é salvo na sessão.
 if uploaded is not None:
@@ -735,37 +728,9 @@ if st.session_state.agente is None:
             st.error(f"Erro ao recarregar o CSV: {e}")
             st.session_state.agente = None
 
-    # Se não houver CSV salvo e o modo de teste estiver ativo
-    elif modo_teste:
-        try:
-            st.sidebar.info("Modo de teste ativo. Carregando dados de exemplo.")
-            sample_data = """Time,Amount,Category,Class
-1,149.62,Electronics,0
-2,2.69,Groceries,0
-3,378.66,Travel,0
-4,12.99,Groceries,0
-5,7.00,Food,1
-6,100.00,Electronics,0
-7,50.50,Travel,1
-8,25.00,Food,0
-9,250.0,Travel,0
-10,15.99,Food,0
-"""
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode='w', encoding='utf-8') as tmpfile:
-                tmpfile.write(sample_data)
-                tmp_path = tmpfile.name
-
-            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
-            st.session_state.csv_path = "default_test_data.csv"
-            if not st.session_state.messages:
-                st.session_state.messages.append({"role": "assistant", "content": "Olá! Carreguei um dataset de exemplo para teste. O que vamos analisar?"})
-        except Exception as e:
-            st.error(f"Erro ao carregar dados de teste: {e}")
-            st.session_state.agente = None
-
 # 3. Exibir a mensagem inicial se nenhum agente foi carregado
 if st.session_state.agente is None:
-    st.info("📄 Envie um CSV ou ative o modo de teste para começar.")
+    st.info("📄 Envie um CSV para começar.")
 else:
     # 4. Se o agente existe, exibe a interface de chat
     agente = st.session_state.agente
@@ -793,6 +758,4 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
-
-
 
