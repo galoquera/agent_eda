@@ -12,12 +12,11 @@ pydantic==2.7.4
 langchain==0.2.14
 langsmith==0.1.81
 
-# Conector Gemini para LangChain (NÃO fixe google-generativeai aqui)
+# Conector Gemini p/ LangChain (não fixe google-generativeai aqui)
 langchain-google-genai==1.0.6
 
-# Streamlit (UI)
+# UI
 streamlit==1.36.0
 
 # Evita conflitos com libs Google
 protobuf==4.25.3
-
