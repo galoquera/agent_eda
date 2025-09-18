@@ -609,45 +609,60 @@ with st.sidebar:
 if "agente" not in st.session_state:
     st.session_state.agente = None
     st.session_state.csv_path = None
+    st.session_state.messages = []
 
 if uploaded is not None:
+    # Reinicia o chat se um novo arquivo for enviado
+    if st.session_state.csv_path != uploaded.name:
+        st.session_state.messages = []
+        st.session_state.csv_path = uploaded.name
+        
     fd, tmp_path = tempfile.mkstemp(suffix=".csv")
     with os.fdopen(fd, "wb") as f:
         f.write(uploaded.getbuffer())
-    st.session_state.csv_path = tmp_path
+    
     try:
         st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
-        st.success("CSV carregado.")
-        with st.expander("Prévia do dataset"):
-            st.dataframe(st.session_state.agente.df.head(30))
-            st.write("**Colunas:** ", ", ".join(st.session_state.agente.df.columns.tolist()))
+        if not st.session_state.messages: # Mensagem inicial apenas uma vez
+            st.success("CSV carregado. Pronto para conversar!")
+            st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
     except Exception as e:
         st.error(str(e))
-elif st.session_state.agente is None:
+        st.session_state.agente = None
+
+elif not st.session_state.agente:
     st.info("📄 Envie um CSV para começar.")
+
 
 if st.session_state.agente is not None:
     agente = st.session_state.agente
 
-    st.markdown("### Faça sua pergunta")
-    pergunta = st.text_input("Ex.: 'Qual a distribuição de cada variável?', 'Quais variáveis mais correlacionadas?', 'mostrar_conclusoes'")
+    # Exibe o histórico de mensagens
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    response_placeholder = st.empty()
+    # Captura a pergunta do usuário
+    if prompt := st.chat_input("Faça sua pergunta sobre o dataset..."):
+        # Adiciona e exibe a mensagem do usuário
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-    if st.button("Perguntar") and pergunta:
-        with response_placeholder.container():
-            proc = agente._preprocessar_pergunta(pergunta)
-            try:
-                with st.spinner("Analisando..."):
+        # Gera e exibe a resposta do agente
+        with st.chat_message("assistant"):
+            with st.spinner("Analisando..."):
+                try:
+                    proc = agente._preprocessar_pergunta(prompt)
                     resposta = agente.agent.invoke(
                         {"input": proc},
                         config={"configurable": {"session_id": "ui_streamlit"},
                                 "tags": ["ui", "streamlit"], "metadata": {"origin": "ui"}},
                     )
-                st.markdown("#### Resposta")
-                st.write(resposta.get("output", resposta))
-            except Exception as e:
-                st.error(str(e))
-
-# (Sem exibição automática das conclusões — elas só aparecem quando você pedir na caixa de pergunta.)
+                    response_content = resposta.get("output", "Não consegui processar sua pergunta.")
+                    st.write(response_content)
+                    st.session_state.messages.append({"role": "assistant", "content": response_content})
+                except Exception as e:
+                    st.error(str(e))
+                    st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
 
