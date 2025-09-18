@@ -575,7 +575,7 @@ if st.session_state.agente is not None:
 
     st.markdown("### Pergunte ao agente")
     pergunta = st.text_input("Digite sua pergunta (ex.: 'Quais são as correlações?', 'Gerar tendências de Amount por dia')")
-    if st.button("Perguntar", type="primary") and pergunta:
+    if st.button("Perguntar") and pergunta:
         proc = agente._preprocessar_pergunta(pergunta)
         try:
             resposta = agente.agent.invoke(
@@ -619,3 +619,4 @@ if st.session_state.agente is not None:
 
     st.markdown("### Conclusões acumuladas")
     st.text(agente.mostrar_conclusoes())
+
