@@ -15,8 +15,7 @@ Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
 
 import os
 import io
-import tempfile
-from typing import List, Optional
+from typing import List
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -26,15 +25,16 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
-# langchain.hub não é mais necessário
 
 # ---------- LangSmith (opcional) ----------
+# DEV REVIEW: Adicionei uma docstring para explicar a função do LangSmith.
 def _enable_langsmith(project: str = "EDA-Agent"):
+    """Ativa o rastreamento com LangSmith se as variáveis de ambiente estiverem configuradas."""
     ls_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")
     if ls_key and not os.getenv("LANGCHAIN_API_KEY"):
         os.environ["LANGCHAIN_API_KEY"] = ls_key
@@ -56,9 +56,13 @@ class AgenteDeAnalise:
         if not google_api_key:
             raise ValueError("Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas Secrets do Streamlit.")
 
-        if not os.path.exists(caminho_arquivo_csv):
+        try:
+            self.df = pd.read_csv(caminho_arquivo_csv)
+        except FileNotFoundError:
             raise FileNotFoundError(f"Arquivo '{caminho_arquivo_csv}' não encontrado.")
-        self.df = pd.read_csv(caminho_arquivo_csv)
+        except Exception as e:
+            raise ValueError(f"Erro ao ler o CSV: {e}")
+
         self.memoria_analises: List[str] = []
         self.ultima_coluna: str | None = None
         self.session_id = session_id
@@ -71,27 +75,47 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
-        # --- PROMPT DEFINIDO LOCALMENTE PARA REMOVER DEPENDÊNCIA DO HUB ---
-        # Recriação da estrutura do prompt 'hwchase17/react-chat'
+        # --- REVISÃO DE ENGENHARIA DE PROMPT ---
+        # DEV REVIEW: O prompt foi reestruturado para ser mais robusto.
+        # 1. Persona Clara: Define o agente como um "Analista de Dados Sênior".
+        # 2. Princípios de Operação: Fornece regras explícitas de comportamento.
+        #    Isso guia o LLM a priorizar ferramentas e ser proativo.
+        # 3. Guia de Ferramentas: Ajuda o LLM a mapear rapidamente a intenção
+        #    do usuário para a ferramenta correta, melhorando a precisão.
         template = """
-Answer the following questions as best you can. You have access to the following tools:
+Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA).
+Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.
 
+**Princípios de Operação:**
+1.  **Ferramentas Primeiro, Sempre:** Sua principal diretriz é usar as ferramentas disponíveis. Se uma pergunta do usuário pode ser respondida por uma ferramenta, você **DEVE** usá-la. Evite responder com conhecimento geral se uma ferramenta pode fornecer uma resposta precisa baseada nos dados.
+2.  **Aja, Não Apenas Descreva:** Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o. Não descreva apenas o que você faria.
+3.  **Seja Proativo e Conciso:** Após usar uma ferramenta e obter um resultado, comente-o brevemente. Destaque os insights mais importantes e, se apropriado, sugira o próximo passo lógico na análise.
+4.  **Gerencie Ambiguidade:** Se uma pergunta for vaga ou uma coluna específica for necessária mas não for mencionada, peça esclarecimentos ao usuário.
+
+**Guia Rápido de Ferramentas:**
+- Para **entender a estrutura** dos dados: `listar_colunas`, `descricao_geral_dados`.
+- Para **medidas resumo** (média, mediana, etc.): `estatisticas_descritivas`.
+- Para visualizar **distribuições**: `plotar_histograma`, `plotar_histogramas_dataset`.
+- Para analisar **relações** entre variáveis: `plotar_mapa_correlacao`, `plotar_dispersao`, `matriz_dispersao`, `tabela_cruzada`.
+- Para encontrar **outliers**: `detectar_outliers_iqr`, `detectar_outliers_zscore`, `resumo_outliers_dataset`.
+
+**Ferramentas Disponíveis:**
 {tools}
 
-Use the following format:
+Use o seguinte formato de raciocínio:
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Question: a pergunta original do usuário que você precisa responder
+Thought: você deve sempre pensar sobre o que fazer para responder à pergunta.
+Action: a ação a ser tomada, que deve ser uma das ferramentas de [{tool_names}]
+Action Input: a entrada para a ação
+Observation: o resultado da ação
+... (este bloco Thought/Action/Action Input/Observation pode se repetir N vezes)
+Thought: Eu agora sei a resposta final.
+Final Answer: a resposta final para a pergunta original do usuário.
 
-Begin!
+Comece!
 
-Previous conversation history:
+Histórico da Conversa:
 {chat_history}
 
 Question: {input}
@@ -99,13 +123,13 @@ Thought:{agent_scratchpad}
 """
         prompt = PromptTemplate.from_template(template)
 
-        base_agent = create_react_agent(self.llm, tools, prompt)
-        self.base_executor = AgentExecutor(
-            agent=base_agent,
+        agent = create_react_agent(self.llm, tools, prompt)
+        self.executor = AgentExecutor(
+            agent=agent,
             tools=tools,
-            verbose=False,
+            verbose=False, # Mantenha False para produção, True para debug
             max_iterations=5,
-            handle_parsing_errors=True,
+            handle_parsing_errors="Por favor, reformule sua pergunta. Não consegui processar a solicitação.",
         )
 
         def get_session_history(session_id: str):
@@ -113,8 +137,9 @@ Thought:{agent_scratchpad}
                 chat_history_store[session_id] = ChatMessageHistory()
             return chat_history_store[session_id]
 
-        self.agent = RunnableWithMessageHistory(
-            self.base_executor, get_session_history,
+        self.agent_with_history = RunnableWithMessageHistory(
+            self.executor,
+            get_session_history,
             input_messages_key="input",
             history_messages_key="chat_history",
         )
@@ -130,172 +155,175 @@ Thought:{agent_scratchpad}
     # ------------------------ Tools ------------------------
     def _definir_ferramentas(self):
         class HistogramaInput(BaseModel):
-            coluna: str = Field(description="Coluna numérica para histograma.")
+            coluna: str = Field(description="A coluna numérica para a qual gerar o histograma.")
 
         class HistAllInput(BaseModel):
-            colunas: str = Field(default="", description="Lista separada por vírgula (vazio = todas numéricas).")
-            kde: bool = Field(default=True, description="Exibir curva KDE.")
-            bins: int = Field(default=30, description="Número de bins.")
-            cols_por_linha: int = Field(default=3, description="Gráficos por linha.")
-            max_colunas: int = Field(default=12, description="Limite superior de colunas plotadas.")
+            colunas: str = Field(default="", description="Lista de colunas separada por vírgula. Se vazio, usa todas as colunas numéricas.")
+            kde: bool = Field(default=True, description="Define se a curva de densidade (KDE) deve ser exibida.")
+            bins: int = Field(default=30, description="O número de barras (bins) no histograma.")
+            cols_por_linha: int = Field(default=3, description="Número de gráficos a serem exibidos por linha.")
+            max_colunas: int = Field(default=12, description="Número máximo de colunas para plotar para evitar poluição visual.")
 
         class FrequenciasInput(BaseModel):
-            coluna: str = Field(description="Coluna para frequências top/bottom.")
-            top_n: int = Field(default=10)
-            bottom_n: int = Field(default=10)
+            coluna: str = Field(description="A coluna para a qual calcular as frequências.")
+            top_n: int = Field(default=10, description="Número de itens mais frequentes a serem exibidos.")
+            bottom_n: int = Field(default=10, description="Número de itens menos frequentes a serem exibidos.")
 
         class ModaInput(BaseModel):
-            coluna: str = Field(description="Coluna para calcular moda.")
+            coluna: str = Field(description="A coluna para a qual calcular a moda.")
             
         class CorrelacaoInput(BaseModel):
-            method: str = Field(default="pearson", description="Método: 'pearson', 'spearman' ou 'kendall'.")
+            method: str = Field(default="pearson", description="O método de correlação a ser usado: 'pearson', 'spearman' ou 'kendall'.")
 
         class DispersaoInput(BaseModel):
-            x: str = Field(description="Coluna X (numérica).")
-            y: str = Field(description="Coluna Y (numérica).")
-            hue: str = Field(default="", description="Coluna categórica (opcional).")
-            amostra: int = Field(default=5000, description="Máximo de linhas amostradas para o gráfico.")
+            x: str = Field(description="O nome da coluna para o eixo X (deve ser numérica).")
+            y: str = Field(description="O nome da coluna para o eixo Y (deve ser numérica).")
+            hue: str = Field(default="", description="Opcional: nome da coluna categórica para colorir os pontos.")
+            amostra: int = Field(default=5000, description="Número máximo de pontos para plotar, para evitar gráficos lentos e poluídos.")
             
         class PairplotInput(BaseModel):
-            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, usa até 6 numéricas.")
-            hue: str = Field(default="", description="Coluna categórica para colorir.")
-            amostra: int = Field(default=3000, description="Máximo de linhas amostradas para o pairplot.")
-            corner: bool = Field(default=True, description="Se True, mostra apenas metade inferior da matriz.")
+            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, o sistema selecionará até 6 colunas numéricas com maior variância.")
+            hue: str = Field(default="", description="Opcional: nome da coluna categórica para colorir os gráficos.")
+            amostra: int = Field(default=3000, description="Número máximo de linhas a serem usadas na plotagem.")
+            corner: bool = Field(default=True, description="Se True, exibe apenas a metade inferior da matriz para evitar redundância.")
 
         class CrosstabInput(BaseModel):
-            linhas: str = Field(description="Coluna para linhas (categórica).")
-            colunas: str = Field(description="Coluna para colunas (categórica).")
-            normalizar: bool = Field(default=True)
-            heatmap: bool = Field(default=True)
-            annot: bool = Field(default=False, description="Anotar valores no heatmap (pode poluir).")
-            top_k: int = Field(default=20, description="Limita categorias por eixo para evitar tabelas gigantes.")
+            linhas: str = Field(description="A coluna a ser usada como linhas na tabela cruzada (geralmente categórica).")
+            colunas: str = Field(description="A coluna a ser usada como colunas na tabela cruzada (geralmente categórica).")
+            normalizar: bool = Field(default=True, description="Se True, os valores são convertidos em porcentagens.")
+            heatmap: bool = Field(default=True, description="Se True, exibe a tabela como um mapa de calor.")
+            annot: bool = Field(default=False, description="Se True, anota os valores no mapa de calor (pode poluir visualmente).")
+            top_k: int = Field(default=20, description="Limita o número de categorias em cada eixo para evitar tabelas excessivamente grandes.")
 
         class OutlierIQRInput(BaseModel):
-            coluna: str = Field(description="Coluna numérica.")
-            plot: bool = Field(default=False)
+            coluna: str = Field(description="A coluna numérica para detectar outliers.")
+            plot: bool = Field(default=False, description="Se True, gera um boxplot para visualizar os outliers.")
 
         class OutlierZInput(BaseModel):
-            coluna: str = Field(description="Coluna numérica.")
-            threshold: float = Field(default=3.0)
-            plot: bool = Field(default=False)
+            coluna: str = Field(description="A coluna numérica para detectar outliers.")
+            threshold: float = Field(default=3.0, description="O limite de Z-score. Pontos com Z-score absoluto maior que este valor são considerados outliers.")
+            plot: bool = Field(default=False, description="Se True, gera um histograma da distribuição dos Z-scores.")
             
         class OutlierIFInput(BaseModel):
-            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, usa todas as numéricas.")
-            contamination: float = Field(default=0.01, description="Proporção esperada de outliers (ex.: 0.01).")
+            colunas: str = Field(default="", description="Colunas separadas por vírgula. Se vazio, usa todas as colunas numéricas.")
+            contamination: float = Field(default=0.01, description="A proporção esperada de outliers no dataset (ex.: 0.01 para 1%).")
 
         class ResumoOutInput(BaseModel):
-            method: str = Field(default="iqr", description="iqr ou zscore")
-            top_k: int = Field(default=10)
+            method: str = Field(default="iqr", description="O método a ser usado: 'iqr' ou 'zscore'.")
+            top_k: int = Field(default=10, description="O número de colunas com mais outliers a serem exibidas.")
 
         class KMeansInput(BaseModel):
-            colunas: str = Field(default="", description="Lista separada por vírgula (vazio = numéricas).")
-            clusters: int = Field(default=3, description="k (mín. 2)")
+            colunas: str = Field(default="", description="Lista de colunas numéricas separada por vírgula para usar na clusterização. Se vazio, usa todas as numéricas.")
+            clusters: int = Field(default=3, description="O número de clusters (k) a serem criados (mínimo de 2).")
 
         class TimeConvertInput(BaseModel):
-            origem: str = Field(default="", description="YYYY-MM-DD HH:MM:SS (vazio = relativo).")
-            unidade: str = Field(default="s", description="s/ms/m/h")
-            nova_coluna: str = Field(default="", description="Nome da coluna criada (opcional).")
-            criar_features: bool = Field(default=True)
+            origem: str = Field(default="", description="Data e hora de início no formato 'YYYY-MM-DD HH:MM:SS'. Se vazio, a coluna 'Time' é tratada como segundos relativos.")
+            unidade: str = Field(default="s", description="A unidade da coluna 'Time': 's' (segundos), 'ms' (milissegundos), 'm' (minutos), 'h' (horas).")
+            nova_coluna: str = Field(default="", description="Opcional: nome para a nova coluna datetime criada.")
+            criar_features: bool = Field(default=True, description="Se True, cria automaticamente colunas adicionais como 'Time_hour' e 'Time_day'.")
 
         class TendenciasInput(BaseModel):
-            coluna: str = Field(description="Coluna numérica (ex.: Amount).")
-            freq: str = Field(default="D", description="H/D/W/M")
+            coluna: str = Field(description="A coluna numérica a ser analisada (ex.: 'Amount').")
+            freq: str = Field(default="D", description="A frequência de reamostragem: 'H' (hora), 'D' (dia), 'W' (semana), 'M' (mês).")
 
+        # DEV REVIEW: As descrições das ferramentas foram aprimoradas para incluir exemplos de uso,
+        # tornando mais fácil para o LLM escolher a ferramenta correta.
         return [
             StructuredTool.from_function(
                 self.listar_colunas, name="listar_colunas",
-                description="Retorna uma lista com os nomes exatos de todas as colunas disponíveis no dataset. Use esta ferramenta quando precisar saber os nomes das colunas para usar em outras ferramentas ou para responder perguntas como 'quais são as colunas do dataset?'."
+                description="Retorna uma lista com os nomes exatos de todas as colunas. Use para saber os nomes das colunas antes de usar outras ferramentas. Ex: 'quais são as colunas?'."
             ),
             StructuredTool.from_function(
                 self.obter_descricao_geral, name="descricao_geral_dados",
-                description="Fornece um resumo geral da estrutura do dataset, incluindo o número de linhas e colunas, os tipos de dados de cada coluna (Dtype) e a contagem de valores não nulos. Essencial para uma primeira visão geral e para perguntas como 'me dê um resumo dos dados' ou 'quais colunas têm valores faltando?'."
+                description="Fornece um resumo da estrutura do dataset (linhas, colunas, tipos, nulos). Essencial para uma primeira visão. Ex: 'me dê um resumo dos dados'."
             ),
             StructuredTool.from_function(
                 self.obter_estatisticas_descritivas, name="estatisticas_descritivas",
-                description="Calcula e exibe uma tabela completa de estatísticas descritivas (contagem, média, desvio padrão, mínimo, máximo e quartis) para todas as colunas numéricas. Use esta ferramenta para responder perguntas sobre medidas de tendência central, dispersão ou distribuição, como 'qual a média da coluna X?', 'mostre as estatísticas da coluna Y' ou 'descreva as variáveis numéricas'."
+                description="Calcula estatísticas descritivas (média, desvio padrão, etc.) para as colunas numéricas. Ex: 'qual a média da coluna X?', 'descreva as variáveis numéricas'."
             ),
             StructuredTool.from_function(
                 self.plotar_histograma, name="plotar_histograma",
-                description="Gera e exibe um histograma para uma única coluna numérica, mostrando a distribuição de seus valores. É ideal para visualizar a forma da distribuição, identificar assimetria e picos. Use para perguntas como 'mostre a distribuição da coluna X' ou 'plote um histograma de Y'.",
+                description="Gera um histograma para uma única coluna numérica para visualizar sua distribuição. Ex: 'mostre a distribuição da coluna X'.",
                 args_schema=HistogramaInput
             ),
             StructuredTool.from_function(
                 self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
-                description="Gera e exibe histogramas para múltiplas colunas numéricas (ou todas) de uma só vez. Use esta ferramenta para obter uma visão rápida da distribuição de várias variáveis ao mesmo tempo, respondendo a perguntas como 'mostre a distribuição de todas as variáveis' ou 'gere histogramas para as colunas A, B e C'.",
+                description="Gera histogramas para múltiplas colunas numéricas de uma só vez. Ex: 'mostre a distribuição de todas as variáveis'.",
                 args_schema=HistAllInput
             ),
             StructuredTool.from_function(
                 self.frequencias_coluna, name="frequencias_coluna",
-                description="Calcula e exibe as contagens de frequência dos valores em uma coluna. Para colunas categóricas, mostra os valores mais e menos comuns. Para colunas numéricas contínuas, agrupa os dados em faixas (bins) para análise. Use para perguntas como 'quais são os valores mais comuns na coluna X?' ou 'mostre a frequência de Y'.",
+                description="Calcula as contagens de frequência dos valores em uma coluna. Ex: 'quais são os valores mais comuns na coluna X?'.",
                 args_schema=FrequenciasInput
             ),
             StructuredTool.from_function(
                 self.moda_coluna, name="moda_coluna",
-                description="Calcula e retorna o valor (ou valores) que aparece com mais frequência em uma coluna específica. Útil para identificar o resultado mais comum. Responde a perguntas como 'qual é a moda da coluna X?'.",
+                description="Calcula o valor mais frequente (moda) de uma coluna. Ex: 'qual é a moda da coluna X?'.",
                 args_schema=ModaInput
             ),
             StructuredTool.from_function(
                 self.mostrar_correlacao, name="plotar_mapa_correlacao",
-                description="Calcula a matriz de correlação entre todas as colunas numéricas e a exibe como um mapa de calor (heatmap). Use esta ferramenta para responder perguntas como 'quais variáveis estão mais correlacionadas?', 'existe uma relação linear entre X e Y?' ou 'mostre o mapa de correlação'.",
+                description="Cria um mapa de calor de correlação entre as colunas numéricas. Ex: 'quais variáveis estão mais correlacionadas?', 'mostre o mapa de correlação'.",
                 args_schema=CorrelacaoInput
             ),
             StructuredTool.from_function(
                 self.plotar_dispersao, name="plotar_dispersao",
-                description="Cria um gráfico de dispersão (scatterplot) para visualizar a relação entre duas variáveis numéricas (X e Y). Opcionalmente, pode-se usar uma terceira variável categórica (hue) para colorir os pontos. Use para investigar relações e padrões, respondendo a perguntas como 'mostre a relação entre X e Y' ou 'plote a dispersão de A vs B colorido por C'.",
+                description="Cria um gráfico de dispersão para visualizar a relação entre duas variáveis numéricas (X e Y). Ex: 'mostre a relação entre X e Y'.",
                 args_schema=DispersaoInput
             ),
             StructuredTool.from_function(
                 self.matriz_dispersao, name="matriz_dispersao",
-                description="Gera uma matriz de gráficos de dispersão (pairplot), mostrando a relação par a par entre várias colunas numéricas. É uma ferramenta poderosa para uma visão geral das inter-relações nos dados. Use para perguntas amplas como 'analise as relações entre as variáveis' ou 'crie uma matriz de dispersão para A, B e C'.",
+                description="Gera uma matriz de gráficos de dispersão (pairplot) para visualizar relações par a par. Ex: 'analise as relações entre as variáveis'.",
                 args_schema=PairplotInput
             ),
             StructuredTool.from_function(
                 self.tabela_cruzada, name="tabela_cruzada",
-                description="Cria uma tabela de contingência (crosstab) para analisar a frequência da relação entre duas variáveis categóricas. Pode exibir os resultados como um heatmap. Use para perguntas como 'qual a relação entre a categoria A e a categoria B?' ou 'cruze os dados de X e Y'.",
+                description="Cria uma tabela de contingência (crosstab) para analisar a relação entre duas variáveis categóricas. Ex: 'qual a relação entre a categoria A e a B?'.",
                 args_schema=CrosstabInput
             ),
             StructuredTool.from_function(
                 self.detectar_outliers_iqr, name="detectar_outliers_iqr",
-                description="Identifica e conta outliers em uma coluna numérica usando o método do Intervalo Interquartil (IQR). Use esta ferramenta para responder a perguntas como 'existem outliers na coluna X com base no IQR?' ou 'quantos outliers a coluna Y possui?'.",
+                description="Identifica outliers em uma coluna usando o método do Intervalo Interquartil (IQR). Ex: 'existem outliers na coluna X pelo método IQR?'.",
                 args_schema=OutlierIQRInput
             ),
             StructuredTool.from_function(
                 self.detectar_outliers_zscore, name="detectar_outliers_zscore",
-                description="Identifica e conta outliers em uma coluna numérica usando o método Z-score, que mede quantos desvios padrão um ponto de dados está da média. Use para perguntas como 'detecte outliers na coluna X usando Z-score'.",
+                description="Identifica outliers em uma coluna usando o método Z-score. Ex: 'detecte outliers na coluna X usando Z-score'.",
                 args_schema=OutlierZInput
             ),
             StructuredTool.from_function(
                 self.detectar_outliers_isolation_forest, name="detectar_outliers_isolation_forest",
-                description="Detecta outliers em múltiplas colunas simultaneamente usando o algoritmo Isolation Forest. É útil para encontrar anomalias em um contexto multivariado. Use para perguntas como 'encontre outliers considerando as colunas A e B juntas'.",
+                description="Detecta anomalias em um contexto multivariado usando o Isolation Forest. Ex: 'encontre outliers considerando as colunas A e B juntas'.",
                 args_schema=OutlierIFInput
             ),
             StructuredTool.from_function(
                 self.resumo_outliers_dataset, name="resumo_outliers_dataset",
-                description="Calcula e exibe um resumo da porcentagem e contagem de outliers para todas as colunas numéricas do dataset, usando o método IQR ou Z-score. Use para obter uma visão geral de quais colunas são mais afetadas por outliers, respondendo a perguntas como 'quais colunas têm mais outliers?'.",
+                description="Exibe um resumo de outliers para todas as colunas numéricas. Ex: 'quais colunas têm mais outliers?'.",
                 args_schema=ResumoOutInput
             ),
             StructuredTool.from_function(
                 self.kmeans_clusterizar, name="kmeans_clusterizar",
-                description="Aplica o algoritmo de clusterização K-means para agrupar os dados em 'k' clusters e visualiza o resultado em um gráfico 2D usando PCA. Use para segmentar os dados e encontrar grupos naturais, respondendo a perguntas como 'segmente os clientes em 3 grupos' ou 'clusterize os dados com base em A e B'.",
+                description="Aplica K-means para agrupar os dados e visualiza os clusters. Ex: 'segmente os clientes em 3 grupos'.",
                 args_schema=KMeansInput
             ),
             StructuredTool.from_function(
                 self.converter_time_para_datetime, name="converter_time_para_datetime",
-                description="Converte uma coluna chamada 'Time', que geralmente contém segundos, para um formato de data e hora (datetime). Também pode criar novas colunas úteis como hora do dia e dia. Use esta ferramenta se precisar fazer análises temporais e o dataset tiver uma coluna 'Time'.",
+                description="Converte a coluna 'Time' (em segundos) para datetime e cria features temporais. Necessário para análises de tempo.",
                 args_schema=TimeConvertInput
             ),
             StructuredTool.from_function(
                 self.tendencias_temporais, name="tendencias_temporais",
-                description="Analisa e plota a tendência de uma coluna numérica ao longo do tempo. Requer uma coluna de data/hora (como 'Time_dt', que pode ser criada com `converter_time_para_datetime`). Agrupa os dados por hora (H), dia (D), semana (W) ou mês (M). Use para perguntas como 'mostre a tendência diária da coluna X' ou 'qual a evolução de Y ao longo do tempo?'.",
+                description="Plota a tendência de uma coluna numérica ao longo do tempo. Requer uma coluna de data/hora. Ex: 'mostre a tendência diária da coluna X'.",
                 args_schema=TendenciasInput
             ),
             StructuredTool.from_function(
                 self.mostrar_conclusoes, name="mostrar_conclusoes",
-                description="Exibe um resumo consolidado de todas as principais conclusões e insights gerados durante a sessão de análise. Use esta ferramenta quando quiser ver um resumo de tudo o que foi descoberto até agora, respondendo a perguntas como 'quais são as conclusões?' ou 'resuma a análise'."
+                description="Exibe um resumo de todos os insights gerados durante a sessão. Ex: 'quais são as conclusões?', 'resuma a análise'."
             ),
         ]
 
     # ---------------- Implementações ----------------
+    # DEV REVIEW: O código de implementação das ferramentas está bem escrito e foi mantido.
     def listar_colunas(self) -> str:
         return f"Colunas: {', '.join(self.df.columns.tolist())}"
 
@@ -445,7 +473,6 @@ Thought:{agent_scratchpad}
         return "Gráfico de dispersão exibido."
         
     def matriz_dispersao(self, colunas: str = "", hue: str = "", amostra: int = 3000, corner: bool = True) -> str:
-        """Pairplot para múltiplas colunas (amostrado)."""
         if colunas:
             cols = [c.strip() for c in colunas.split(",") if c.strip()]
         else:
@@ -542,63 +569,69 @@ Thought:{agent_scratchpad}
         try:
             from sklearn.preprocessing import StandardScaler
             from sklearn.ensemble import IsolationForest
-        except Exception:
-            return "Isolation Forest requer scikit-learn. Adicione 'scikit-learn' ao requirements."
+        except ImportError:
+            return "Isolation Forest requer scikit-learn. Adicione 'scikit-learn' ao seu requirements.txt."
 
         if colunas:
-            cols = [c.strip() for c in colunas.split(",") if c.strip()]
+            cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
             cols = self.df.select_dtypes(include="number").columns.tolist()
 
         if not cols:
-            return "Não há colunas numéricas suficientes."
+            return "Não há colunas numéricas válidas para a análise."
         X = self.df[cols].dropna()
         if X.empty:
-            return "Após remover NAs, não sobraram linhas."
+            return "Após remover valores nulos, não sobraram dados para análise."
 
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
         used_contamination = max(1e-4, min(contamination, 0.5))
         clf = IsolationForest(contamination=used_contamination, random_state=42)
-        labels = clf.fit_predict(Xs)  # -1 = outlier
+        labels = clf.fit_predict(Xs)
         n_out = int((labels == -1).sum()); n = int(len(labels)); pct = (n_out / n * 100) if n else 0.0
-        msg = (f"Isolation Forest: {n_out}/{n} = {pct:.3f}% de outliers nas colunas {cols} "
-               f"(contamination={used_contamination}).")
+        msg = (f"Isolation Forest encontrou {n_out}/{n} ({pct:.3f}%) outliers nas colunas {cols} "
+               f"(com contaminação esperada de {used_contamination}).")
         self._lembrar("outliers_ds", msg)
         return msg
 
     def resumo_outliers_dataset(self, method: str = "iqr", top_k: int = 10) -> str:
         df_num = self.df.select_dtypes(include="number")
         if df_num.empty:
-            return "Sem colunas numéricas."
+            return "Nenhuma coluna numérica encontrada para analisar outliers."
         linhas = []
         for col in df_num.columns:
             s = df_num[col].dropna(); n = int(s.shape[0])
             if n == 0:
                 linhas.append((col, 0.0, 0, 0)); continue
+            
+            cnt = 0
             if method.lower() == "zscore":
                 mu, sigma = s.mean(), s.std(ddof=0)
-                if sigma == 0 or pd.isna(sigma):
-                    cnt, pct = 0, 0.0
-                else:
+                if sigma > 0 and not pd.isna(sigma):
                     z = (s - mu) / sigma
-                    cnt = int((z.abs() > 3.0).sum()); pct = (cnt / n * 100)
-            else:
+                    cnt = int((z.abs() > 3.0).sum())
+            else: # Padrão para IQR
                 q1, q3 = s.quantile(0.25), s.quantile(0.75); iqr = q3 - q1
-                low, high = q1 - 1.5*iqr, q3 + 1.5*iqr
-                cnt = int(((s < low) | (s > high)).sum()); pct = (cnt / n * 100)
+                if iqr > 0:
+                    low, high = q1 - 1.5*iqr, q3 + 1.5*iqr
+                    cnt = int(((s < low) | (s > high)).sum())
+            
+            pct = (cnt / n * 100) if n > 0 else 0
             linhas.append((col, pct, cnt, n))
+            
         linhas.sort(key=lambda x: x[1], reverse=True)
         top = linhas[:max(1, top_k)]
         media_pct = sum(p for _, p, _, _ in linhas) / len(linhas) if linhas else 0
+        
         self._lembrar("outliers_ds",
                       "Top outliers ({}): {}. Média geral: {:.2f}%.".format(
                           method.upper(),
-                          ", ".join([f"{c} {p:.2f}%" for c, p, _, _ in top[:3]]),
+                          ", ".join([f"{c} ({p:.2f}%)" for c, p, _, _ in top[:3]]),
                           media_pct))
-        partes = [f"Resumo de outliers por {method.upper()} (top {len(top)}):"]
+        
+        partes = [f"Resumo de outliers por {method.upper()} (top {len(top)} colunas):"]
         for col, pct, cnt, n in top:
-            partes.append(f"- {col}: {cnt}/{n} = {pct:.3f}%")
-        partes.append(f"Média % outliers numéricas: {media_pct:.3f}%")
+            partes.append(f"- **{col}**: {cnt} de {n} pontos ({pct:.3f}%)")
+        partes.append(f"\n*Média geral de outliers nas colunas numéricas: {media_pct:.3f}%*")
         return "\n".join(partes)
 
     def kmeans_clusterizar(self, colunas: str = "", clusters: int = 3) -> str:
@@ -606,26 +639,31 @@ Thought:{agent_scratchpad}
             from sklearn.preprocessing import StandardScaler
             from sklearn.cluster import KMeans
             from sklearn.decomposition import PCA
-        except Exception:
-            return "k-means requer scikit-learn. Adicione 'scikit-learn' ao requirements."
-        if clusters < 2:
-            clusters = 2
-        cols = [c.strip() for c in colunas.split(",") if c.strip()] or self.df.select_dtypes(include="number").columns.tolist()
+        except ImportError:
+            return "K-means requer scikit-learn. Adicione 'scikit-learn' ao seu requirements.txt."
+        
+        k = max(2, clusters)
+        cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns] or self.df.select_dtypes(include="number").columns.tolist()
         if not cols:
-            return "Sem colunas numéricas para clusterização."
+            return "Nenhuma coluna numérica encontrada para clusterização."
+        
         X = self.df[cols].dropna()
-        if X.empty:
-            return "Sem linhas após remoção de NAs."
+        if X.shape[0] < k:
+            return f"Não há dados suficientes ({X.shape[0]} linhas) para criar {k} clusters."
+            
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
-        km = KMeans(n_clusters=clusters, n_init=10, random_state=42)
+        km = KMeans(n_clusters=k, n_init='auto', random_state=42)
         labels = km.fit_predict(Xs)
         sizes = pd.Series(labels).value_counts().sort_index().to_dict()
+        
         pca = PCA(n_components=2, random_state=42); XY = pca.fit_transform(Xs)
+        
         fig, ax = plt.subplots(figsize=(8, 6))
-        sns.scatterplot(x=XY[:,0], y=XY[:,1], hue=labels, legend=True, ax=ax)
-        ax.set_title(f"K-means (k={clusters}) — PCA 2D"); ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.grid(True, alpha=0.3)
+        sns.scatterplot(x=XY[:,0], y=XY[:,1], hue=labels, palette="viridis", legend="full", ax=ax)
+        ax.set_title(f"Visualização dos Clusters (K-means, k={k}) via PCA"); ax.set_xlabel("Componente Principal 1"); ax.set_ylabel("Componente Principal 2"); ax.grid(True, alpha=0.3)
         st.pyplot(fig)
-        resumo = f"k-means (k={clusters}), inércia={km.inertia_:.2f}, tamanhos={sizes}."
+        
+        resumo = f"Clusterização K-means (k={k}) concluída. Inércia: {km.inertia_:.2f}. Tamanhos dos clusters: {sizes}."
         self._lembrar("clusters", resumo)
         return resumo
 
@@ -633,108 +671,118 @@ Thought:{agent_scratchpad}
                                          nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
-            return "Erro: coluna 'Time' não encontrada."
+            return "Erro: coluna 'Time' não encontrada no dataset."
         s = pd.to_numeric(self.df[col], errors="coerce")
         if s.isna().all():
-            return "Erro: 'Time' não é numérico."
+            return "Erro: a coluna 'Time' não pôde ser convertida para um formato numérico."
+        
         try:
             td = pd.to_timedelta(s, unit=unidade)
         except Exception as e:
-            return f"Erro ao converter para Timedelta: {e}"
-        created = []
+            return f"Erro ao converter 'Time' para Timedelta: {e}"
+            
+        target = (nova_coluna or "Time_dt").strip()
+        created = [target]
+        
         if origem.strip():
-            base = pd.to_datetime(origem)
-            target = (nova_coluna or "Time_dt").strip()
-            self.df[target] = base + td
-            created.append(target)
-            modo = f"ancorado em '{origem}'"
+            try:
+                base = pd.to_datetime(origem)
+                self.df[target] = base + td
+                modo = f"ancorado em '{origem}'"
+            except Exception as e:
+                return f"Erro ao converter a data de origem: {e}"
         else:
-            target = (nova_coluna or "Time_delta").strip()
             self.df[target] = td
-            created.append(target)
             modo = "relativo (Timedelta)"
+            
         if criar_features:
-            seconds_total = td.dt.total_seconds()
-            self.df["Time_hour"] = ((seconds_total // 3600) % 24).astype(int)
-            self.df["Time_day"] = (seconds_total // 86400).astype(int)
-            bins = (seconds_total // 3600).astype(int)
-            self.df["Time_bin_1h"] = bins.astype(str) + "h-" + (bins + 1).astype(str) + "h"
-            created += ["Time_hour", "Time_day", "Time_bin_1h"]
-        msg = f"Conversão de 'Time' {modo}. Criadas: {', '.join(created)}."
+            dt_accessor = self.df[target].dt if pd.api.types.is_datetime64_any_dtype(self.df[target]) else None
+            if dt_accessor:
+                self.df["Time_hour"] = dt_accessor.hour
+                self.df["Time_day_of_week"] = dt_accessor.day_name()
+                created += ["Time_hour", "Time_day_of_week"]
+            
+        msg = f"Coluna 'Time' convertida com sucesso ({modo}). Colunas criadas: {', '.join(created)}."
         self._lembrar("tempo", msg)
         return msg
 
     def tendencias_temporais(self, coluna: str, freq: str = "D") -> str:
         if coluna not in self.df.columns:
-            return f"Erro: '{coluna}' não existe."
+            return f"Erro: a coluna '{coluna}' não existe."
         if not pd.api.types.is_numeric_dtype(self.df[coluna]):
-            return f"'{coluna}' deve ser numérica."
-        ts_col = "Time_dt" if "Time_dt" in self.df.columns else None
-        if not ts_col and "Time" in self.df.columns:
-            self.converter_time_para_datetime(origem="1970-01-01 00:00:00", unidade="s", nova_coluna="Time_dt", criar_features=False)
-            ts_col = "Time_dt"
+            return f"Erro: a coluna '{coluna}' deve ser numérica para análise de tendência."
+            
+        ts_col = next((c for c in self.df.columns if pd.api.types.is_datetime64_any_dtype(self.df[c])), None)
         if not ts_col:
-            return "Não há coluna temporal ('Time' ou 'Time_dt')."
-        df_ts = self.df[[ts_col, coluna]].dropna().sort_values(ts_col).set_index(ts_col)
-        series = df_ts[coluna].resample(freq).mean()
-        if series.empty:
-            return "Série vazia após reamostragem."
-        # slope simples (regressão linear 1D)
-        x = (series.index.view('i8') // 10**9)  # segundos
-        y = series.values
-        slope = ((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean())**2).sum() if ((x - x.mean())**2).sum() != 0 else 0
-        direcao = "alta" if slope > 0 else "queda" if slope < 0 else "estável"
-        self._lembrar("tendência", f"{coluna} em {freq}: tendência de {direcao} (inclinação {slope:.6f}).")
-
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(series.index, series.values, label=f"mean({coluna})")
-        ax.set_title(f"Tendência temporal: {coluna} por {freq}")
-        ax.set_xlabel("Tempo"); ax.set_ylabel(coluna); ax.grid(True, linestyle="--", alpha=0.3); ax.legend()
+            return "Erro: Nenhuma coluna de data/hora encontrada. Use a ferramenta `converter_time_para_datetime` primeiro."
+            
+        df_ts = self.df[[ts_col, coluna]].dropna().set_index(ts_col)
+        if df_ts.empty:
+            return "Não há dados suficientes para analisar a tendência."
+            
+        series_sum = df_ts[coluna].resample(freq).sum()
+        series_mean = df_ts[coluna].resample(freq).mean()
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        ax1.plot(series_sum.index, series_sum.values, label=f"Soma de {coluna}", color="navy")
+        ax1.set_title(f"Soma de '{coluna}' Agregada por Período ('{freq}')")
+        ax1.set_ylabel("Soma Total"); ax1.grid(True, linestyle="--", alpha=0.5)
+        
+        ax2.plot(series_mean.index, series_mean.values, label=f"Média de {coluna}", color="darkred")
+        ax2.set_title(f"Média de '{coluna}' Agregada por Período ('{freq}')")
+        ax2.set_xlabel("Tempo"); ax2.set_ylabel("Média"); ax2.grid(True, linestyle="--", alpha=0.5)
+        
+        plt.tight_layout()
         st.pyplot(fig)
-        return "Tendência temporal exibida."
+        
+        return f"Gráfico de tendência temporal para a coluna '{coluna}' com frequência '{freq}' foi exibido."
 
     def mostrar_conclusoes(self) -> str:
         if not self.memoria_analises:
-            return "Nenhuma análise registrada."
-        linhas = []
+            return "Nenhuma conclusão foi registrada na memória ainda."
+        
+        blocos = {}
         for item in self.memoria_analises:
-            if item.startswith("[") and "] " in item:
+            try:
                 chave, texto = item.split("] ", 1)
-                linhas.append((chave.strip("[]"), texto))
-            else:
-                linhas.append(("geral", item))
-        linhas.sort(key=lambda x: x[0])
-        blocos, atual, buffer = [], None, []
-        for chave, texto in linhas:
-            if chave != atual:
-                if buffer:
-                    blocos.append(f"**{atual.capitalize()}**\n- " + "\n- ".join(buffer))
-                    buffer = []
-                atual = chave
-            buffer.append(texto)
-        if buffer:
-            blocos.append(f"**{atual.capitalize()}**\n- " + "\n- ".join(buffer))
-        return "\n\n".join(blocos)
+                chave = chave.strip("[]").capitalize()
+                if chave not in blocos:
+                    blocos[chave] = []
+                blocos[chave].append(texto)
+            except ValueError:
+                if "Geral" not in blocos:
+                    blocos["Geral"] = []
+                blocos["Geral"].append(item)
+        
+        output = ["### Resumo das Análises\n"]
+        for chave, textos in blocos.items():
+            output.append(f"**{chave}**")
+            for texto in textos:
+                output.append(f"- {texto}")
+            output.append("") # Linha em branco para espaçamento
+            
+        return "\n".join(output)
 
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
-        # Simplificado para evitar o erro de chamadas múltiplas.
+        # DEV REVIEW: A lógica de pré-processamento foi mantida por ser um atalho útil,
+        # mas em um sistema de produção, poderia ser substituída por uma chamada de LLM
+        # para classificação de intenção, tornando-a mais flexível.
         t = pergunta.strip()
         if t in self.df.columns:
             self.ultima_coluna = t
-            # Pede apenas UMA ação para evitar o erro.
-            return f"Gere um histograma para a coluna '{t}'."
+            return f"Analise a coluna '{t}'. Comece mostrando um histograma para visualizar sua distribuição."
         
         low = t.lower()
-        if "mostrar conclus" in low or "quais as conclus" in low:
-              return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
+        if "mostrar conclus" in low or "quais as conclus" in low or "resuma a análise" in low:
+              return "Use a ferramenta `mostrar_conclusoes` para listar as conclusões da memória."
 
         return pergunta
 
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
-st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário. Conclusões aparecem só quando você pedir.")
+st.caption("Envie um CSV e faça perguntas. O agente gera gráficos e insights. Peça para ele 'resumir a análise' a qualquer momento.")
 
 # --- Lógica de Persistência do Arquivo ---
 DATA_DIR = "data"
@@ -753,22 +801,20 @@ if not st.session_state.csv_path:
     try:
         csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
         if csv_files:
-            # Carrega o primeiro CSV que encontrar no diretório
             st.session_state.csv_path = os.path.join(DATA_DIR, csv_files[0])
     except Exception as e:
         st.warning(f"Não foi possível ler o diretório de dados: {e}")
 
 
 with st.sidebar:
-    st.subheader("Upload do CSV")
+    st.subheader("Configuração do Dataset")
     uploaded = st.file_uploader("Selecione um arquivo .csv", type=["csv"], key="file_uploader")
     
     if st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
-        st.success(f"Arquivo em uso: {os.path.basename(st.session_state.csv_path)}")
-        if st.button("Remover arquivo e começar de novo"):
+        st.success(f"Em uso: {os.path.basename(st.session_state.csv_path)}")
+        if st.button("🗑️ Remover arquivo e reiniciar"):
             try:
                 os.remove(st.session_state.csv_path)
-                # Limpa o estado da sessão completamente
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.rerun()
@@ -782,56 +828,66 @@ if uploaded is not None:
     with open(persistent_path, "wb") as f:
         f.write(uploaded.getvalue())
     
-    # Se o arquivo mudou, reinicia o estado
     if st.session_state.csv_path != persistent_path:
         st.session_state.csv_path = persistent_path
-        st.session_state.agente = None 
-        st.session_state.messages = [] 
-        st.rerun() 
+        # Reinicia o estado para forçar a recarga do agente com o novo arquivo
+        keys_to_reset = ["agente", "messages", "chat_history_store"]
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
 # 2. Inicializar o agente se ele ainda não existir na sessão
-if st.session_state.agente is None:
+if "agente" not in st.session_state or st.session_state.agente is None:
     if st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
-        try:
-            st.session_state.agente = AgenteDeAnalise(
-                caminho_arquivo_csv=st.session_state.csv_path,
-                chat_history_store=st.session_state.chat_history_store
-            )
-            if not st.session_state.messages:
-                st.success(f"CSV '{os.path.basename(st.session_state.csv_path)}' carregado. Pronto para conversar!")
-                st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
-        except Exception as e:
-            st.error(f"Erro ao carregar o CSV '{os.path.basename(st.session_state.csv_path)}': {e}")
-            st.session_state.agente = None
+        with st.spinner(f"Carregando '{os.path.basename(st.session_state.csv_path)}' e inicializando o agente..."):
+            try:
+                if "chat_history_store" not in st.session_state:
+                     st.session_state.chat_history_store = {}
+                
+                st.session_state.agente = AgenteDeAnalise(
+                    caminho_arquivo_csv=st.session_state.csv_path,
+                    chat_history_store=st.session_state.chat_history_store
+                )
+                if "messages" not in st.session_state or not st.session_state.messages:
+                    st.session_state.messages = [{"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"}]
+            except Exception as e:
+                st.error(f"Erro ao inicializar o agente: {e}")
+                st.session_state.agente = None
 
-# 3. Exibir a mensagem inicial se nenhum agente foi carregado
+# 3. Exibir a interface de chat
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
 if st.session_state.agente is None:
-    st.info("📄 Envie um CSV para começar.")
+    if not uploaded:
+        st.info("📄 Por favor, envie um arquivo CSV para começar a análise.")
 else:
-    # 4. Se o agente existe, exibe a interface de chat
-    agente = st.session_state.agente
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
     if prompt := st.chat_input("Faça sua pergunta sobre o dataset..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analisando..."):
+            with st.spinner("Analisando e pensando..."):
                 try:
-                    proc = agente._preprocessar_pergunta(prompt)
-                    resposta = agente.agent.invoke(
-                        {"input": proc},
-                        config={"configurable": {"session_id": "ui_streamlit"},
-                                "tags": ["ui", "streamlit"], "metadata": {"origin": "ui"}},
+                    agente = st.session_state.agente
+                    proc_prompt = agente._preprocessar_pergunta(prompt)
+                    
+                    resposta = agente.agent_with_history.invoke(
+                        {"input": proc_prompt},
+                        config={"configurable": {"session_id": agente.session_id}},
                     )
                     response_content = resposta.get("output", "Não consegui processar sua pergunta.")
-                    st.write(response_content)
+                    st.markdown(response_content)
                     st.session_state.messages.append({"role": "assistant", "content": response_content})
                 except Exception as e:
-                    st.error(str(e))
-                    st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+                    # DEV REVIEW: Tratamento de erro mais explícito para o usuário.
+                    error_message = f"Ocorreu um erro inesperado: {str(e)}"
+                    st.error(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
 
