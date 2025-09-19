@@ -60,7 +60,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro",
+            model="gemini-2.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -758,4 +758,5 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+
 
