@@ -202,47 +202,97 @@ Thought:{agent_scratchpad}
             freq: str = Field(default="D", description="H/D/W/M")
 
         return [
-            StructuredTool.from_function(self.listar_colunas, name="listar_colunas",
-                                          description="Lista as colunas do dataset."),
-            StructuredTool.from_function(self.obter_descricao_geral, name="descricao_geral_dados",
-                                          description="Resumo (linhas/colunas/tipos/nulos)."),
-            StructuredTool.from_function(self.obter_estatisticas_descritivas, name="estatisticas_descritivas",
-                                          description="Calcula e exibe uma tabela de estatísticas descritivas (média, desvio padrão, mediana, etc.) para as colunas numéricas. Responde a perguntas sobre medidas de tendência central e dispersão."),
-            StructuredTool.from_function(self.plotar_histograma, name="plotar_histograma",
-                                          description="Histograma de uma coluna numérica.", args_schema=HistogramaInput),
-            StructuredTool.from_function(self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
-                                          description="Histogramas em lote (múltiplas colunas em uma única chamada).",
-                                          args_schema=HistAllInput),
-            StructuredTool.from_function(self.frequencias_coluna, name="frequencias_coluna",
-                                          description="Top/bottom frequências (bins p/ numéricas contínuas).",
-                                          args_schema=FrequenciasInput),
-            StructuredTool.from_function(self.moda_coluna, name="moda_coluna",
-                                          description="Moda(s) da coluna.", args_schema=ModaInput),
-            StructuredTool.from_function(self.mostrar_correlacao, name="plotar_mapa_correlacao",
-                                          description="Mapa de calor de correlação entre numéricas.", args_schema=CorrelacaoInput),
-            StructuredTool.from_function(self.plotar_dispersao, name="plotar_dispersao",
-                                          description="Dispersão X vs Y (hue opcional).", args_schema=DispersaoInput),
-            StructuredTool.from_function(self.matriz_dispersao, name="matriz_dispersao",
-                                          description="Matriz de dispersão (pairplot) para visualizar relações entre múltiplas variáveis.",
-                                          args_schema=PairplotInput),
-            StructuredTool.from_function(self.tabela_cruzada, name="tabela_cruzada",
-                                          description="Crosstab entre duas categóricas.", args_schema=CrosstabInput),
-            StructuredTool.from_function(self.detectar_outliers_iqr, name="detectar_outliers_iqr",
-                                          description="Outliers por IQR.", args_schema=OutlierIQRInput),
-            StructuredTool.from_function(self.detectar_outliers_zscore, name="detectar_outliers_zscore",
-                                          description="Outliers por Z-score.", args_schema=OutlierZInput),
-            StructuredTool.from_function(self.detectar_outliers_isolation_forest, name="detectar_outliers_isolation_forest",
-                                          description="Outliers por Isolation Forest (para múltiplas colunas).", args_schema=OutlierIFInput),
-            StructuredTool.from_function(self.resumo_outliers_dataset, name="resumo_outliers_dataset",
-                                          description="Resumo de outliers por coluna (iqr/zscore).", args_schema=ResumoOutInput),
-            StructuredTool.from_function(self.kmeans_clusterizar, name="kmeans_clusterizar",
-                                          description="K-means e PCA 2D.", args_schema=KMeansInput),
-            StructuredTool.from_function(self.converter_time_para_datetime, name="converter_time_para_datetime",
-                                          description="Converte 'Time' e cria features.", args_schema=TimeConvertInput),
-            StructuredTool.from_function(self.tendencias_temporais, name="tendencias_temporais",
-                                          description="Reamostra uma métrica por H/D/W/M e plota.", args_schema=TendenciasInput),
-            StructuredTool.from_function(self.mostrar_conclusoes, name="mostrar_conclusoes",
-                                          description="Resumo das análises realizadas."),
+            StructuredTool.from_function(
+                self.listar_colunas, name="listar_colunas",
+                description="Retorna uma lista com os nomes exatos de todas as colunas disponíveis no dataset. Use esta ferramenta quando precisar saber os nomes das colunas para usar em outras ferramentas ou para responder perguntas como 'quais são as colunas do dataset?'."
+            ),
+            StructuredTool.from_function(
+                self.obter_descricao_geral, name="descricao_geral_dados",
+                description="Fornece um resumo geral da estrutura do dataset, incluindo o número de linhas e colunas, os tipos de dados de cada coluna (Dtype) e a contagem de valores não nulos. Essencial para uma primeira visão geral e para perguntas como 'me dê um resumo dos dados' ou 'quais colunas têm valores faltando?'."
+            ),
+            StructuredTool.from_function(
+                self.obter_estatisticas_descritivas, name="estatisticas_descritivas",
+                description="Calcula e exibe uma tabela completa de estatísticas descritivas (contagem, média, desvio padrão, mínimo, máximo e quartis) para todas as colunas numéricas. Use esta ferramenta para responder perguntas sobre medidas de tendência central, dispersão ou distribuição, como 'qual a média da coluna X?', 'mostre as estatísticas da coluna Y' ou 'descreva as variáveis numéricas'."
+            ),
+            StructuredTool.from_function(
+                self.plotar_histograma, name="plotar_histograma",
+                description="Gera e exibe um histograma para uma única coluna numérica, mostrando a distribuição de seus valores. É ideal para visualizar a forma da distribuição, identificar assimetria e picos. Use para perguntas como 'mostre a distribuição da coluna X' ou 'plote um histograma de Y'.",
+                args_schema=HistogramaInput
+            ),
+            StructuredTool.from_function(
+                self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
+                description="Gera e exibe histogramas para múltiplas colunas numéricas (ou todas) de uma só vez. Use esta ferramenta para obter uma visão rápida da distribuição de várias variáveis ao mesmo tempo, respondendo a perguntas como 'mostre a distribuição de todas as variáveis' ou 'gere histogramas para as colunas A, B e C'.",
+                args_schema=HistAllInput
+            ),
+            StructuredTool.from_function(
+                self.frequencias_coluna, name="frequencias_coluna",
+                description="Calcula e exibe as contagens de frequência dos valores em uma coluna. Para colunas categóricas, mostra os valores mais e menos comuns. Para colunas numéricas contínuas, agrupa os dados em faixas (bins) para análise. Use para perguntas como 'quais são os valores mais comuns na coluna X?' ou 'mostre a frequência de Y'.",
+                args_schema=FrequenciasInput
+            ),
+            StructuredTool.from_function(
+                self.moda_coluna, name="moda_coluna",
+                description="Calcula e retorna o valor (ou valores) que aparece com mais frequência em uma coluna específica. Útil para identificar o resultado mais comum. Responde a perguntas como 'qual é a moda da coluna X?'.",
+                args_schema=ModaInput
+            ),
+            StructuredTool.from_function(
+                self.mostrar_correlacao, name="plotar_mapa_correlacao",
+                description="Calcula a matriz de correlação entre todas as colunas numéricas e a exibe como um mapa de calor (heatmap). Use esta ferramenta para responder perguntas como 'quais variáveis estão mais correlacionadas?', 'existe uma relação linear entre X e Y?' ou 'mostre o mapa de correlação'.",
+                args_schema=CorrelacaoInput
+            ),
+            StructuredTool.from_function(
+                self.plotar_dispersao, name="plotar_dispersao",
+                description="Cria um gráfico de dispersão (scatterplot) para visualizar a relação entre duas variáveis numéricas (X e Y). Opcionalmente, pode-se usar uma terceira variável categórica (hue) para colorir os pontos. Use para investigar relações e padrões, respondendo a perguntas como 'mostre a relação entre X e Y' ou 'plote a dispersão de A vs B colorido por C'.",
+                args_schema=DispersaoInput
+            ),
+            StructuredTool.from_function(
+                self.matriz_dispersao, name="matriz_dispersao",
+                description="Gera uma matriz de gráficos de dispersão (pairplot), mostrando a relação par a par entre várias colunas numéricas. É uma ferramenta poderosa para uma visão geral das inter-relações nos dados. Use para perguntas amplas como 'analise as relações entre as variáveis' ou 'crie uma matriz de dispersão para A, B e C'.",
+                args_schema=PairplotInput
+            ),
+            StructuredTool.from_function(
+                self.tabela_cruzada, name="tabela_cruzada",
+                description="Cria uma tabela de contingência (crosstab) para analisar a frequência da relação entre duas variáveis categóricas. Pode exibir os resultados como um heatmap. Use para perguntas como 'qual a relação entre a categoria A e a categoria B?' ou 'cruze os dados de X e Y'.",
+                args_schema=CrosstabInput
+            ),
+            StructuredTool.from_function(
+                self.detectar_outliers_iqr, name="detectar_outliers_iqr",
+                description="Identifica e conta outliers em uma coluna numérica usando o método do Intervalo Interquartil (IQR). Use esta ferramenta para responder a perguntas como 'existem outliers na coluna X com base no IQR?' ou 'quantos outliers a coluna Y possui?'.",
+                args_schema=OutlierIQRInput
+            ),
+            StructuredTool.from_function(
+                self.detectar_outliers_zscore, name="detectar_outliers_zscore",
+                description="Identifica e conta outliers em uma coluna numérica usando o método Z-score, que mede quantos desvios padrão um ponto de dados está da média. Use para perguntas como 'detecte outliers na coluna X usando Z-score'.",
+                args_schema=OutlierZInput
+            ),
+            StructuredTool.from_function(
+                self.detectar_outliers_isolation_forest, name="detectar_outliers_isolation_forest",
+                description="Detecta outliers em múltiplas colunas simultaneamente usando o algoritmo Isolation Forest. É útil para encontrar anomalias em um contexto multivariado. Use para perguntas como 'encontre outliers considerando as colunas A e B juntas'.",
+                args_schema=OutlierIFInput
+            ),
+            StructuredTool.from_function(
+                self.resumo_outliers_dataset, name="resumo_outliers_dataset",
+                description="Calcula e exibe um resumo da porcentagem e contagem de outliers para todas as colunas numéricas do dataset, usando o método IQR ou Z-score. Use para obter uma visão geral de quais colunas são mais afetadas por outliers, respondendo a perguntas como 'quais colunas têm mais outliers?'.",
+                args_schema=ResumoOutInput
+            ),
+            StructuredTool.from_function(
+                self.kmeans_clusterizar, name="kmeans_clusterizar",
+                description="Aplica o algoritmo de clusterização K-means para agrupar os dados em 'k' clusters e visualiza o resultado em um gráfico 2D usando PCA. Use para segmentar os dados e encontrar grupos naturais, respondendo a perguntas como 'segmente os clientes em 3 grupos' ou 'clusterize os dados com base em A e B'.",
+                args_schema=KMeansInput
+            ),
+            StructuredTool.from_function(
+                self.converter_time_para_datetime, name="converter_time_para_datetime",
+                description="Converte uma coluna chamada 'Time', que geralmente contém segundos, para um formato de data e hora (datetime). Também pode criar novas colunas úteis como hora do dia e dia. Use esta ferramenta se precisar fazer análises temporais e o dataset tiver uma coluna 'Time'.",
+                args_schema=TimeConvertInput
+            ),
+            StructuredTool.from_function(
+                self.tendencias_temporais, name="tendencias_temporais",
+                description="Analisa e plota a tendência de uma coluna numérica ao longo do tempo. Requer uma coluna de data/hora (como 'Time_dt', que pode ser criada com `converter_time_para_datetime`). Agrupa os dados por hora (H), dia (D), semana (W) ou mês (M). Use para perguntas como 'mostre a tendência diária da coluna X' ou 'qual a evolução de Y ao longo do tempo?'.",
+                args_schema=TendenciasInput
+            ),
+            StructuredTool.from_function(
+                self.mostrar_conclusoes, name="mostrar_conclusoes",
+                description="Exibe um resumo consolidado de todas as principais conclusões e insights gerados durante a sessão de análise. Use esta ferramenta quando quiser ver um resumo de tudo o que foi descoberto até agora, respondendo a perguntas como 'quais são as conclusões?' ou 'resuma a análise'."
+            ),
         ]
 
     # ---------------- Implementações ----------------
@@ -784,6 +834,4 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
-
-
 
