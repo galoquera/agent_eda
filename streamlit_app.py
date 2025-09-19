@@ -91,6 +91,7 @@ Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecid
 2.  **Aja, Não Apenas Descreva:** Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o. Não descreva apenas o que você faria.
 3.  **Seja Proativo e Conciso:** Após usar uma ferramenta e obter um resultado, comente-o brevemente. Destaque os insights mais importantes e, se apropriado, sugira o próximo passo lógico na análise.
 4.  **Gerencie Ambiguidade:** Se uma pergunta for vaga ou uma coluna específica for necessária mas não for mencionada, peça esclarecimentos ao usuário.
+5.  **Conclua Sempre:** Após suas `Thought` (reflexões) e `Action` (ações), você **DEVE** fornecer uma resposta final com `Final Answer:`. Se não conseguir encontrar uma resposta exata, sua resposta final deve indicar isso.
 
 **Guia Rápido de Ferramentas:**
 - Para **entender a estrutura** dos dados: `listar_colunas`, `descricao_geral_dados`.
@@ -885,6 +886,11 @@ else:
                     response_content = resposta.get("output", "Não consegui processar sua pergunta.")
                     st.markdown(response_content)
                     st.session_state.messages.append({"role": "assistant", "content": response_content})
+                except StopIteration:
+                    # DEV REVIEW: Captura o erro específico e fornece feedback útil.
+                    error_message = "O agente não conseguiu chegar a uma conclusão. Tente reformular sua pergunta de uma maneira mais direta."
+                    st.error(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
                 except Exception as e:
                     # DEV REVIEW: Tratamento de erro mais explícito para o usuário.
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
