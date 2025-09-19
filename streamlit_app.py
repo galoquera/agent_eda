@@ -26,7 +26,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pantic import BaseModel, Field
 
 # ---------- LangSmith (opcional) ----------
 def _enable_langsmith(project: str = "EDA-Agent"):
@@ -74,12 +74,12 @@ class AgenteDeAnalise:
                  "Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.\n\n"
                  
                  "**Princípios de Operação:**\n"
-                 "1.  **Pense Passo a Passo:** Antes de escolher uma ferramenta, analise a pergunta do usuário para entender a real intenção.\n"
-                 "2.  **Aja, Não Apenas Descreva:** Sua função principal é executar análises. Se a pergunta pode ser respondida com uma ferramenta, **execute-a**. Não se limite a descrever o que você faria; mostre o resultado.\n"
-                 "3.  **Autoavaliação Crítica (Reflexão):** Antes de dar a resposta final, revise o resultado da ferramenta. A resposta atende **completamente** à pergunta original do usuário? Se a análise parece incompleta ou superficial, considere usar outra ferramenta ou refinar a análise para fornecer um insight mais profundo.\n"
-                 "4.  **Seja Proativo e Conciso:** Após usar uma ferramenta e validar o resultado, comente-o brevemente. Se gerar um histograma, aponte a assimetria. Se gerar correlação, destaque os pares mais fortes.\n"
-                 "5.  **Use o Contexto:** O histórico da conversa é crucial. Se uma pergunta for vaga como 'e os outliers?', use a última coluna mencionada como foco.\n"
-                 "6.  **Gerencie Ambiguidade:** Se uma ferramenta precisa de uma coluna específica e nenhuma foi mencionada, pergunte qual. Se a pergunta for geral (ex: 'mostre a distribuição'), pergunte se o usuário quer ver para **todas** as variáveis ou para **uma** específica.\n"
+                 "1.  **Ferramentas Primeiro, Sempre:** Sua principal diretriz é usar as ferramentas disponíveis. Se uma pergunta do usuário pode ser respondida por uma ferramenta, você **DEVE** usá-la. Evite responder com conhecimento geral se uma ferramenta pode fornecer uma resposta precisa baseada nos dados.\n"
+                 "2.  **Aja, Não Apenas Descreva:** Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o. Não descreva apenas o que você faria.\n"
+                 "3.  **Autoavaliação Crítica (Reflexão):** Após usar uma ferramenta, revise o resultado. Ele atende **completamente** à pergunta original? Se não, refine a análise ou use outra ferramenta.\n"
+                 "4.  **Seja Proativo e Conciso:** Após validar o resultado, comente-o brevemente. Destaque os insights mais importantes.\n"
+                 "5.  **Use o Contexto:** Utilize o histórico da conversa para entender perguntas vagas.\n"
+                 "6.  **Gerencie Ambiguidade:** Peça esclarecimentos se uma coluna específica for necessária, mas não for mencionada.\n"
 
                  "**Guia de Ferramentas:**\n"
                  "- **Para Entender a Estrutura:** Use `descricao_geral_dados`, `listar_colunas`.\n"
@@ -203,7 +203,7 @@ class AgenteDeAnalise:
             StructuredTool.from_function(self.obter_descricao_geral, name="descricao_geral_dados",
                                           description="Resumo (linhas/colunas/tipos/nulos)."),
             StructuredTool.from_function(self.obter_estatisticas_descritivas, name="estatisticas_descritivas",
-                                          description="Estatísticas descritivas numéricas."),
+                                          description="Calcula e exibe uma tabela de estatísticas descritivas (média, desvio padrão, mediana, etc.) para as colunas numéricas. Responde a perguntas sobre medidas de tendência central e dispersão."),
             StructuredTool.from_function(self.plotar_histograma, name="plotar_histograma",
                                           description="Histograma de uma coluna numérica.", args_schema=HistogramaInput),
             StructuredTool.from_function(self.plotar_histogramas_dataset, name="plotar_histogramas_dataset",
