@@ -9,6 +9,10 @@ Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
   tendências temporais, k-means.
 """
 
+# --- REQUISITOS ---
+# Para executar este agente, certifique-se de ter as seguintes bibliotecas instaladas:
+# pip install streamlit pandas matplotlib seaborn python-dotenv langchain langchain-google-genai pydantic scikit-learn langsmith
+
 import os
 import io
 import tempfile
@@ -47,7 +51,7 @@ _enable_langsmith()
 # ===================================================================
 
 class AgenteDeAnalise:
-    def __init__(self, caminho_arquivo_csv: str, session_id: str = "ui_streamlit"):
+    def __init__(self, caminho_arquivo_csv: str, chat_history_store: dict, session_id: str = "ui_streamlit"):
         google_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not google_api_key:
             raise ValueError("Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas Secrets do Streamlit.")
@@ -67,8 +71,8 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
-        # --- PROMPT DE SISTEMA REVISADO (Puxado do LangChain Hub) ---
-        prompt = hub.pull("hwchase17/react")
+        # --- PROMPT CONVERSACIONAL (Puxado do LangChain Hub) ---
+        prompt = hub.pull("hwchase17/react-chat")
 
         base_agent = create_react_agent(self.llm, tools, prompt)
         self.base_executor = AgentExecutor(
@@ -79,14 +83,13 @@ class AgenteDeAnalise:
             handle_parsing_errors=True,
         )
 
-        self._store = {}
-        def _get_history(session_id: str):
-            if session_id not in self._store:
-                self._store[session_id] = ChatMessageHistory()
-            return self._store[session_id]
+        def get_session_history(session_id: str):
+            if session_id not in chat_history_store:
+                chat_history_store[session_id] = ChatMessageHistory()
+            return chat_history_store[session_id]
 
         self.agent = RunnableWithMessageHistory(
-            self.base_executor, _get_history,
+            self.base_executor, get_session_history,
             input_messages_key="input",
             history_messages_key="chat_history",
         )
@@ -668,6 +671,7 @@ if "agente" not in st.session_state:
     st.session_state.agente = None
     st.session_state.messages = []
     st.session_state.csv_path = None
+    st.session_state.chat_history_store = {}
 
 # Tenta encontrar um CSV persistente ao iniciar a sessão
 if not st.session_state.csv_path:
@@ -714,7 +718,10 @@ if uploaded is not None:
 if st.session_state.agente is None:
     if st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
         try:
-            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=st.session_state.csv_path)
+            st.session_state.agente = AgenteDeAnalise(
+                caminho_arquivo_csv=st.session_state.csv_path,
+                chat_history_store=st.session_state.chat_history_store
+            )
             if not st.session_state.messages:
                 st.success(f"CSV '{os.path.basename(st.session_state.csv_path)}' carregado. Pronto para conversar!")
                 st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
@@ -752,4 +759,5 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+
 
