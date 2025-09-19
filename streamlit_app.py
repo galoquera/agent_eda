@@ -21,12 +21,13 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
+from langchain import hub
 
 # ---------- LangSmith (opcional) ----------
 def _enable_langsmith(project: str = "EDA-Agent"):
@@ -66,35 +67,10 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
-        # --- PROMPT DE SISTEMA REVISADO ---
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system",
-                 "Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA). "
-                 "Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.\n\n"
-                 
-                 "**Princípios de Operação:**\n"
-                 "1.  **Ferramentas Primeiro, Sempre:** Sua principal diretriz é usar as ferramentas disponíveis. Se uma pergunta do usuário pode ser respondida por uma ferramenta, você **DEVE** usá-la. Evite responder com conhecimento geral se uma ferramenta pode fornecer uma resposta precisa baseada nos dados.\n"
-                 "2.  **Aja, Não Apenas Descreva:** Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o. Não descreva apenas o que você faria.\n"
-                 "3.  **Autoavaliação Crítica (Reflexão):** Após usar uma ferramenta, revise o resultado. Ele atende **completamente** à pergunta original? Se não, refine a análise ou use outra ferramenta.\n"
-                 "4.  **Seja Proativo e Conciso:** Após validar o resultado, comente-o brevemente. Destaque os insights mais importantes.\n"
-                 "5.  **Use o Contexto:** Utilize o histórico da conversa para entender perguntas vagas.\n"
-                 "6.  **Gerencie Ambiguidade:** Peça esclarecimentos se uma coluna específica for necessária, mas não for mencionada.\n"
+        # --- PROMPT DE SISTEMA REVISADO (Puxado do LangChain Hub) ---
+        prompt = hub.pull("hwchase17/react")
 
-                 "**Guia de Ferramentas:**\n"
-                 "- **Para Entender a Estrutura:** Use `descricao_geral_dados`, `listar_colunas`.\n"
-                 "- **Para Medidas Resumo:** Use `estatisticas_descritivas` para perguntas sobre média, mediana, desvio padrão, etc.\n"
-                 "- **Para Distribuições:** `plotar_histograma` (uma coluna), `plotar_histogramas_dataset` (várias).\n"
-                 "- **Para Relações:** `plotar_mapa_correlacao`, `plotar_dispersao`, `matriz_dispersao`, `tabela_cruzada`.\n"
-                 "- **Para Outliers:** `detectar_outliers_iqr` ou `zscore` (uma coluna), `resumo_outliers_dataset` (geral).\n"
-                ),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder("agent_scratchpad"),
-            ]
-        )
-
-        base_agent = create_tool_calling_agent(self.llm, tools, prompt)
+        base_agent = create_react_agent(self.llm, tools, prompt)
         self.base_executor = AgentExecutor(
             agent=base_agent,
             tools=tools,
@@ -576,7 +552,7 @@ class AgenteDeAnalise:
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                       nova_coluna: str = "", criar_features: bool = True) -> str:
+                                         nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada."
@@ -673,7 +649,7 @@ class AgenteDeAnalise:
         
         low = t.lower()
         if "mostrar conclus" in low or "quais as conclus" in low:
-             return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
+              return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
 
         return pergunta
 
