@@ -60,7 +60,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -79,7 +79,9 @@ class AgenteDeAnalise:
                  "Após gerar um resultado, interprete-o brevemente, destacando um ou dois insights importantes.\n"
                  "2.  **Seja Proativo e Conciso:** Se gerar um histograma, comente a assimetria. Se gerar correlação, aponte os pares mais fortes.\n"
                  "3.  **Use o Contexto:** O histórico da conversa é crucial. Se uma pergunta for vaga como 'e os outliers?', use a última coluna mencionada como foco.\n"
-                 "4.  **Peça Esclarecimentos com Moderação:** Só peça mais informações se a pergunta for extremamente ambígua e o contexto não ajudar.\n"
+                 "4.  **Gerencie Ambiguidade e Peça Esclarecimentos:**\n"
+                 "    - **Uma Coluna Faltando:** Se uma ferramenta precisa de UMA coluna específica (como `plotar_histograma` ou `detectar_outliers_iqr`) e nenhuma foi mencionada, pergunte qual. Ex: 'Para qual coluna você gostaria de ver o histograma?'\n"
+                 "    - **Um vs. Todos:** Se a pergunta for geral sobre distribuições ou histogramas (ex: 'mostre a distribuição das variáveis'), não presuma. Pergunte se o usuário quer ver a distribuição de **todas** as variáveis numéricas de uma vez (`plotar_histogramas_dataset`) ou se prefere especificar **uma** coluna. Ex: 'Claro! Você gostaria de ver os histogramas para todas as variáveis numéricas ou para uma específica?'\n"
                  "5.  **Mantenha a Memória:** Lembre-se de registrar suas conclusões na memória interna para consulta com 'mostrar_conclusoes'.\n\n"
 
                  "**Guia de Ferramentas:**\n"
@@ -281,7 +283,7 @@ class AgenteDeAnalise:
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                     cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                      cols_por_linha: int = 3, max_colunas: int = 12) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -580,7 +582,7 @@ class AgenteDeAnalise:
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                       nova_coluna: str = "", criar_features: bool = True) -> str:
+                                          nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada."
