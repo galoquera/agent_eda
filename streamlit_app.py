@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
-- Upload de CSV genérico
+- Upload de CSV genérico (com persistência de arquivo)
 - Pergunta/resposta com ferramentas (gráficos no Streamlit)
 - Memória interna (conclusões), exibida apenas quando o usuário pedir
 - Tools: descrição, histogramas (1 e múltiplos), frequências, moda,
@@ -686,44 +686,68 @@ st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
 st.caption("Envie um CSV e faça perguntas. O agente gera gráficos quando necessário. Conclusões aparecem só quando você pedir.")
 
+# --- Lógica de Persistência do Arquivo ---
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
 # Inicializar o estado da sessão
 if "agente" not in st.session_state:
     st.session_state.agente = None
     st.session_state.messages = []
-    st.session_state.uploaded_csv_content = None # Para persistir o conteúdo do CSV
     st.session_state.csv_path = None
+
+# Tenta encontrar um CSV persistente ao iniciar a sessão
+if not st.session_state.csv_path:
+    try:
+        csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+        if csv_files:
+            # Carrega o primeiro CSV que encontrar no diretório
+            st.session_state.csv_path = os.path.join(DATA_DIR, csv_files[0])
+    except Exception as e:
+        st.warning(f"Não foi possível ler o diretório de dados: {e}")
+
 
 with st.sidebar:
     st.subheader("Upload do CSV")
     uploaded = st.file_uploader("Selecione um arquivo .csv", type=["csv"], key="file_uploader")
+    
+    if st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
+        st.success(f"Arquivo em uso: {os.path.basename(st.session_state.csv_path)}")
+        if st.button("Remover arquivo e começar de novo"):
+            try:
+                os.remove(st.session_state.csv_path)
+                # Limpa o estado da sessão completamente
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao remover o arquivo: {e}")
     st.divider()
 
-# 1. Lidar com um novo upload: Se um arquivo for enviado, ele tem prioridade e seu conteúdo é salvo na sessão.
+# 1. Lidar com um novo upload
 if uploaded is not None:
-    # Se o arquivo for diferente do anterior, reinicia o estado
-    if st.session_state.csv_path != uploaded.name:
-        st.session_state.uploaded_csv_content = uploaded.getvalue()
-        st.session_state.csv_path = uploaded.name
-        st.session_state.agente = None # Força a reinicialização do agente
-        st.session_state.messages = [] # Limpa o histórico do chat
-        st.rerun() # Força o recarregamento para usar o novo arquivo
+    persistent_path = os.path.join(DATA_DIR, uploaded.name)
+    with open(persistent_path, "wb") as f:
+        f.write(uploaded.getvalue())
+    
+    # Se o arquivo mudou, reinicia o estado
+    if st.session_state.csv_path != persistent_path:
+        st.session_state.csv_path = persistent_path
+        st.session_state.agente = None 
+        st.session_state.messages = [] 
+        st.rerun() 
 
 # 2. Inicializar o agente se ele ainda não existir na sessão
 if st.session_state.agente is None:
-    # Tenta carregar a partir de um CSV já enviado e salvo na sessão
-    if st.session_state.uploaded_csv_content is not None:
+    if st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
         try:
-            # Cria um arquivo temporário com o conteúdo salvo
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmpfile:
-                tmpfile.write(st.session_state.uploaded_csv_content)
-                tmp_path = tmpfile.name
-
-            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=tmp_path)
+            st.session_state.agente = AgenteDeAnalise(caminho_arquivo_csv=st.session_state.csv_path)
             if not st.session_state.messages:
-                st.success(f"CSV '{st.session_state.csv_path}' carregado. Pronto para conversar!")
+                st.success(f"CSV '{os.path.basename(st.session_state.csv_path)}' carregado. Pronto para conversar!")
                 st.session_state.messages.append({"role": "assistant", "content": "Olá! Sou seu agente de análise. O que você gostaria de explorar no dataset?"})
         except Exception as e:
-            st.error(f"Erro ao recarregar o CSV: {e}")
+            st.error(f"Erro ao carregar o CSV '{os.path.basename(st.session_state.csv_path)}': {e}")
             st.session_state.agente = None
 
 # 3. Exibir a mensagem inicial se nenhum agente foi carregado
