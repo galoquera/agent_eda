@@ -1,4 +1,3 @@
-# streamlit_app.py
 # -*- coding: utf-8 -*-
 """
 Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
@@ -118,7 +117,6 @@ class AgenteDeAnalise:
             self.base_executor, _get_history,
             input_messages_key="input",
             history_messages_key="chat_history",
-            output_messages_key="output",
         )
 
     # ---- Helper de memória de conclusões ----
@@ -283,7 +281,7 @@ class AgenteDeAnalise:
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                      cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                     cols_por_linha: int = 3, max_colunas: int = 12) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -582,7 +580,7 @@ class AgenteDeAnalise:
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                          nova_coluna: str = "", criar_features: bool = True) -> str:
+                                       nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada."
@@ -670,19 +668,17 @@ class AgenteDeAnalise:
 
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
-        # Simplificado, pois o prompt principal é mais robusto agora.
-        # Mantido para atalhos convenientes.
+        # Simplificado para evitar o erro de chamadas múltiplas.
         t = pergunta.strip()
         if t in self.df.columns:
             self.ultima_coluna = t
-            return f"Analise a coluna '{t}': gere um histograma e verifique outliers com IQR."
+            # Pede apenas UMA ação para evitar o erro.
+            return f"Gere um histograma para a coluna '{t}'."
         
         low = t.lower()
         if "mostrar conclus" in low or "quais as conclus" in low:
              return "Use 'mostrar_conclusoes' para listar as conclusões da memória."
 
-        # O prompt do sistema agora lida com a maioria dos casos de linguagem natural.
-        # Esta função fica como um otimizador para casos muito diretos.
         return pergunta
 
 # ========================= UI Streamlit =========================
@@ -760,5 +756,4 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
-
 
