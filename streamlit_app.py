@@ -26,12 +26,12 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
-from langchain import hub
+# langchain.hub não é mais necessário
 
 # ---------- LangSmith (opcional) ----------
 def _enable_langsmith(project: str = "EDA-Agent"):
@@ -71,8 +71,33 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
-        # --- PROMPT CONVERSACIONAL (Puxado do LangChain Hub) ---
-        prompt = hub.pull("hwchase17/react-chat")
+        # --- PROMPT DEFINIDO LOCALMENTE PARA REMOVER DEPENDÊNCIA DO HUB ---
+        # Recriação da estrutura do prompt 'hwchase17/react-chat'
+        template = """
+Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Previous conversation history:
+{chat_history}
+
+Question: {input}
+Thought:{agent_scratchpad}
+"""
+        prompt = PromptTemplate.from_template(template)
 
         base_agent = create_react_agent(self.llm, tools, prompt)
         self.base_executor = AgentExecutor(
@@ -759,5 +784,6 @@ else:
                 except Exception as e:
                     st.error(str(e))
                     st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+
 
 
