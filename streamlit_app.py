@@ -67,7 +67,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-1.5-pro",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -85,7 +85,6 @@ Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecid
 4.  **Gerencie Ambiguidade:** Se uma pergunta for vaga ou uma coluna específica for necessária mas não for mencionada, peça esclarecimentos ao usuário.
 5.  **Seja Eficiente com Pedidos Amplos:** Para solicitações que envolvem "todas" ou "cada" variável (como 'mostre a distribuição de todas as variáveis'), a ferramenta pode retornar um subconjunto representativo para manter a clareza. Considere a ação como **completa** e resuma os resultados com base no subconjunto exibido, a menos que o usuário peça especificamente por outras colunas.
 6.  **Conclua Sempre:** Após suas `Thought` (reflexões) e `Action` (ações), você **DEVE** fornecer uma resposta final com `Final Answer:`. Se não conseguir encontrar uma resposta exata, sua resposta final deve indicar isso.
-7.  **Evite Loops:** Para um único pedido do usuário, você **NÃO DEVE** chamar a mesma ferramenta de plotagem (como `plotar_histogramas_dataset` ou `matriz_dispersao`) repetidamente em uma sequência. Uma única execução que mostra um subconjunto de dados é a resposta completa e final para um pedido amplo.
 
 **Guia Rápido de Ferramentas:**
 - Para **entender a estrutura** dos dados: `listar_colunas`, `descricao_geral_dados`.
@@ -123,7 +122,7 @@ Thought:{agent_scratchpad}
             agent=agent,
             tools=tools,
             verbose=True,  # Mantenha False para produção, True para debug
-            max_iterations=5,
+            max_iterations=7,
             handle_parsing_errors="Por favor, reformule sua pergunta. Não consegui processar a solicitação.",
         )
 
@@ -390,10 +389,11 @@ Thought:{agent_scratchpad}
         self.ultima_coluna = cols[0]
         
         if total_cols_disponiveis > max_colunas:
-            return (f"Exibi os primeiros {len(cols)} de {total_cols_disponiveis} histogramas. "
-                    f"Para ver outros, peça por colunas específicas (ex: 'mostre a distribuição de V10, V11, V12').")
+            return (f"Uma amostra inicial de {len(cols)} histogramas foi exibida para dar uma visão geral. "
+                    f"O dataset possui {total_cols_disponiveis} colunas numéricas no total. "
+                    f"Para analisar outras colunas, por favor, especifique os nomes (ex: 'histograma para V10, V11').")
         else:
-            return f"Histogramas gerados para: {', '.join(cols)}."
+            return f"Histogramas gerados para todas as {len(cols)} colunas numéricas: {', '.join(cols)}."
 
     def frequencias_coluna(self, coluna: str, top_n: int = 10, bottom_n: int = 10) -> str:
         if coluna not in self.df.columns:
@@ -768,26 +768,7 @@ Thought:{agent_scratchpad}
             
         return "\n".join(output)
 
-    # Pré-processador: ajuda com pedidos amplos
-    def _preprocessar_pergunta(self, pergunta: str) -> str:
-        t = pergunta.strip()
-        low = t.lower()
-
-        # Handle single column analysis
-        if t in self.df.columns:
-            self.ultima_coluna = t
-            return f"Analise a coluna '{t}'. Comece mostrando um histograma para visualizar sua distribuição."
-        
-        # Handle broad distribution queries
-        broad_triggers = ["todas as variáveis", "cada variável", "todas as colunas", "distribuição geral"]
-        if any(trigger in low for trigger in broad_triggers) and ("distribui" in low or "histograma" in low):
-            return "Use a ferramenta `plotar_histogramas_dataset` para fornecer uma visão geral das distribuições das variáveis. Como este é um pedido amplo, o subconjunto padrão fornecido pela ferramenta é suficiente."
-
-        # Handle memory/summary queries
-        if "mostrar conclus" in low or "quais as conclus" in low or "resuma a análise" in low:
-            return "Use a ferramenta `mostrar_conclusoes` para listar as conclusões da memória."
-
-        return pergunta
+    # A função _preprocessar_pergunta foi removida, pois o modelo gemini-1.5-pro é mais avançado e pode interpretar os pedidos do usuário diretamente.
 
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
@@ -885,10 +866,9 @@ else:
             with st.spinner("Analisando e pensando..."):
                 try:
                     agente = st.session_state.agente
-                    proc_prompt = agente._preprocessar_pergunta(prompt)
                     
                     resposta = agente.agent_with_history.invoke(
-                        {"input": proc_prompt},
+                        {"input": prompt},
                         config={"configurable": {"session_id": agente.session_id}},
                     )
                     response_content = resposta.get("output", "Não consegui processar sua pergunta.")
@@ -902,5 +882,6 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
 
