@@ -155,8 +155,8 @@ Thought:{agent_scratchpad}
             colunas: str = Field(default="", description="Lista de colunas separada por vírgula. Se vazio, usa todas as colunas numéricas.")
             kde: bool = Field(default=True, description="Define se a curva de densidade (KDE) deve ser exibida.")
             bins: int = Field(default=30, description="O número de barras (bins) no histograma.")
-            cols_por_linha: int = Field(default=3, description="Número de gráficos a serem exibidos por linha.")
-            max_colunas: int = Field(default=12, description="Número máximo de colunas para plotar para evitar poluição visual.")
+            cols_por_linha: int = Field(default=2, description="Número de gráficos a serem exibidos por linha.")
+            max_colunas: int = Field(default=4, description="Número máximo de colunas para plotar para evitar poluição visual.")
 
         class FrequenciasInput(BaseModel):
             coluna: str = Field(description="A coluna para a qual calcular as frequências.")
@@ -351,7 +351,7 @@ Thought:{agent_scratchpad}
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                  cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                  cols_por_linha: int = 2, max_colunas: int = 4) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -363,7 +363,7 @@ Thought:{agent_scratchpad}
         cols = cols[:max_colunas]
         n = len(cols)
         linhas = (n + cols_por_linha - 1) // cols_por_linha
-        fig, axes = plt.subplots(linhas, cols_por_linha, figsize=(cols_por_linha*4.2, linhas*3.4))
+        fig, axes = plt.subplots(linhas, cols_por_linha, figsize=(cols_por_linha*5, linhas*3.8))
         axes = axes.flatten() if n > 1 else [axes]
 
         for i, c in enumerate(cols):
@@ -378,7 +378,7 @@ Thought:{agent_scratchpad}
         for j in range(len(cols), len(axes)):
             axes[j].set_axis_off()
 
-        fig.suptitle("Distribuição das variáveis (histogramas)", y=0.99)
+        fig.suptitle("Distribuição das variáveis (amostra inicial)", y=1.02)
         plt.tight_layout()
         st.pyplot(fig)
 
@@ -389,8 +389,8 @@ Thought:{agent_scratchpad}
         self.ultima_coluna = cols[0]
         
         if total_cols_disponiveis > max_colunas:
-            return (f"Histogramas gerados para as primeiras {len(cols)} de {total_cols_disponiveis} colunas numéricas "
-                    f"para manter a clareza. Especifique colunas se desejar ver outras.")
+            return (f"Exibi os primeiros {len(cols)} de {total_cols_disponiveis} histogramas. "
+                    f"Para ver outros, peça por colunas específicas (ex: 'mostre a distribuição de V10, V11, V12').")
         else:
             return f"Histogramas gerados para: {', '.join(cols)}."
 
@@ -770,11 +770,19 @@ Thought:{agent_scratchpad}
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
         t = pergunta.strip()
+        low = t.lower()
+
+        # Handle single column analysis
         if t in self.df.columns:
             self.ultima_coluna = t
             return f"Analise a coluna '{t}'. Comece mostrando um histograma para visualizar sua distribuição."
         
-        low = t.lower()
+        # Handle broad distribution queries
+        broad_triggers = ["todas as variáveis", "cada variável", "todas as colunas", "distribuição geral"]
+        if any(trigger in low for trigger in broad_triggers) and ("distribui" in low or "histograma" in low):
+            return "Use a ferramenta `plotar_histogramas_dataset` para fornecer uma visão geral das distribuições das variáveis. Como este é um pedido amplo, o subconjunto padrão fornecido pela ferramenta é suficiente."
+
+        # Handle memory/summary queries
         if "mostrar conclus" in low or "quais as conclus" in low or "resuma a análise" in low:
             return "Use a ferramenta `mostrar_conclusoes` para listar as conclusões da memória."
 
@@ -893,6 +901,4 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-
 
