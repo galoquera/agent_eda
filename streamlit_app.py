@@ -359,14 +359,41 @@ class AgenteDeAnalise:
         return f"Moda(s) de '{coluna}': {valores}"
 
     def mostrar_correlacao(self, method: str = "pearson") -> str:
+        # Blindagem do parâmetro para evitar erros como ValueError(2)
+        valid = {"pearson", "spearman", "kendall"}
+        method = str(method).lower()
+        if method not in valid:
+            method = "pearson"
+
         df_num = self.df.select_dtypes(include="number")
-        if df_num.empty:
-            return "Sem colunas numéricas para correlação."
-        corr = df_num.corr(method=method).abs()
-        mask = ~corr.index.to_series().eq(corr.columns.values[:, None])
-        top = (corr.where(mask).unstack().dropna().sort_values(ascending=False).drop_duplicates().head(3))
-        pares = ", ".join([f"{a}~{b}: {v:.2f}" for (a, b), v in top.items()])
-        self._lembrar("correlação", f"Pares mais correlacionados ({method}): {pares}.")
+        if df_num.empty or df_num.shape[1] < 2:
+            return "Sem colunas numéricas suficientes para correlação."
+
+        # Matriz de correlação absoluta para ranquear pares
+        corr_abs = df_num.corr(method=method).abs().copy()
+
+        # Ignora auto-correlação na diagonal
+        import numpy as np
+        corr_vals = corr_abs.values.copy()
+        np.fill_diagonal(corr_vals, np.nan)
+        corr_no_diag = pd.DataFrame(corr_vals, index=corr_abs.index, columns=corr_abs.columns)
+
+        # Pega somente o triângulo superior para evitar pares duplicados (A~B e B~A)
+        iu = np.triu_indices_from(corr_no_diag, k=1)
+        if iu[0].size == 0:
+            pares_str = "nenhum par disponível"
+        else:
+            top_series = pd.Series(
+                corr_no_diag.values[iu],
+                index=pd.MultiIndex.from_arrays(
+                    [corr_no_diag.index[iu[0]], corr_no_diag.columns[iu[1]]]
+                ),
+            ).dropna().sort_values(ascending=False).head(3)
+            pares_str = ", ".join([f"{a}~{b}: {v:.2f}" for (a, b), v in top_series.items()]) if not top_series.empty else "nenhum par disponível"
+
+        self._lembrar("correlação", f"Pares mais correlacionados ({method}): {pares_str}.")
+
+        # Heatmap com valores originais (não absolutos) para leitura visual
         fig, ax = plt.subplots(figsize=(12, 9))
         sns.heatmap(df_num.corr(method=method), cmap="coolwarm", ax=ax)
         ax.set_title(f"Mapa de calor da correlação ({method})")
@@ -550,7 +577,7 @@ class AgenteDeAnalise:
         media_pct = sum(p for _, p, _, _ in linhas) / len(linhas) if linhas else 0
         self._lembrar("outliers_ds",
                       "Top outliers ({}): {}. Média geral: {:.2f}%."
-                      .format(method.upper(),
+                      .format(method.UPPER(),
                               ", ".join([f"{c} ({p:.2f}%)" for c, p, _, _ in top[:3]]),
                               media_pct))
         partes = [f"Resumo de outliers por {method.upper()} (top {len(top)} colunas):"]
@@ -574,11 +601,13 @@ class AgenteDeAnalise:
         X = self.df[cols].dropna()
         if X.shape[0] < k:
             return f"Não há dados suficientes ({X.shape[0]} linhas) para criar {k} clusters."
+        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler()
         Xs = scaler.fit_transform(X)
         km = KMeans(n_clusters=k, n_init='auto', random_state=42)
         labels = km.fit_predict(Xs)
         sizes = pd.Series(labels).value_counts().sort_index().to_dict()
+        from sklearn.decomposition import PCA
         pca = PCA(n_components=2, random_state=42)
         XY = pca.fit_transform(Xs)
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -775,5 +804,3 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-
