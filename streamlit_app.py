@@ -82,7 +82,8 @@ class AgenteDeAnalise:
                  "1. Use as ferramentas disponíveis para responder às perguntas. Se uma pergunta pode ser respondida por uma ferramenta, use-a.\n"
                  "2. Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o.\n"
                  "3. Após usar uma ferramenta, comente brevemente sobre o resultado, destacando os insights mais importantes.\n"
-                 "4. Se uma pergunta for vaga ou uma coluna não for mencionada, peça esclarecimentos ao usuário."),
+                 "4. IMPORTANTE: Ao responder, você DEVE incluir a saída completa e formatada da ferramenta (como tabelas) primeiro, e DEPOIS adicionar sua análise ou resumo.\n"
+                 "5. Se uma pergunta for vaga ou uma coluna não for mencionada, peça esclarecimentos ao usuário."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder("agent_scratchpad"),
@@ -869,6 +870,7 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
 
 
