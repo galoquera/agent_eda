@@ -63,20 +63,11 @@ class AgenteDeAnalise:
         self.ultima_coluna: str | None = None
         self.session_id = session_id
 
-        # --- LLM OpenAI com fallback de temperatura ---
-        # - padrão: gpt-5 (não enviamos 'temperature' para a API)
-        # - se OPENAI_MODEL != gpt-5, aplica OPENAI_TEMPERATURE (0–2, se definido)
-        model_name = os.getenv("OPENAI_MODEL", "gpt-5").strip()
-        kwargs = {"model": model_name, "api_key": openai_api_key}
-        if not model_name.lower().startswith("gpt-5"):
-            t = os.getenv("OPENAI_TEMPERATURE")
-            if t is not None:
-                try:
-                    t = float(t)
-                    kwargs["temperature"] = max(0.0, min(2.0, t))
-                except ValueError:
-                    pass
-        self.llm = ChatOpenAI(**kwargs)
+        # LLM: fixo em GPT-5 (sem temperature)
+        self.llm = ChatOpenAI(
+            model="gpt-5",
+            api_key=openai_api_key,
+        )
 
         tools = self._definir_ferramentas()
 
@@ -781,3 +772,4 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
