@@ -1,28 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
+Agente EDA (Streamlit) — LangChain + GPT-5 (+ LangSmith opcional)
 - Arquitetura: Tool-Calling (mais direta e eficiente)
-- Modelo: gemini-1.5-flash
+- Modelo: gpt-5
 - Upload de CSV genérico (com persistência de arquivo)
 - Pergunta/resposta com ferramentas (gráficos no Streamlit)
 - Memória interna (conclusões), exibida apenas quando o usuário pedir
+
+Obs. importante:
+- Forçamos backend não-interativo (Agg) do Matplotlib para evitar qualquer janela/plot fora do Streamlit.
 """
 
 # --- REQUISITOS ---
-# Para executar este agente, certifique-se de ter as seguintes bibliotecas instaladas:
-# pip install streamlit pandas matplotlib seaborn python-dotenv langchain langchain-google-genai pydantic scikit-learn langsmith
+# pip install streamlit pandas matplotlib seaborn python-dotenv langchain langchain-openai pydantic scikit-learn langsmith openai
 
 import os
 import io
 from typing import List
 
-import pandas as pd
+# >>> Força backend não-interativo antes de importar pyplot <<<
+import matplotlib
+matplotlib.use("Agg")  # garante que nada será plotado em terminal/GUI
 import matplotlib.pyplot as plt
+
+import pandas as pd
 import seaborn as sns
 import streamlit as st
 from dotenv import load_dotenv
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -50,9 +56,9 @@ _enable_langsmith()
 
 class AgenteDeAnalise:
     def __init__(self, caminho_arquivo_csv: str, chat_history_store: dict, session_id: str = "ui_streamlit"):
-        google_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
-            raise ValueError("Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas Secrets do Streamlit.")
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            raise ValueError("Defina OPENAI_API_KEY nas Secrets do Streamlit ou no arquivo .env.")
 
         try:
             self.df = pd.read_csv(caminho_arquivo_csv)
@@ -65,10 +71,11 @@ class AgenteDeAnalise:
         self.ultima_coluna: str | None = None
         self.session_id = session_id
 
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+        # LLM: GPT-5 via LangChain OpenAI
+        self.llm = ChatOpenAI(
+            model="gpt-5",
             temperature=0,
-            google_api_key=google_api_key,
+            api_key=openai_api_key,
         )
 
         tools = self._definir_ferramentas()
@@ -325,13 +332,18 @@ class AgenteDeAnalise:
         desc_str = desc.to_string()
         return f"```text\n{desc_str}\n```"
 
+    def _show_and_close(self, fig):
+        """Renderiza figura no Streamlit e fecha para não manter handles abertos."""
+        st.pyplot(fig)
+        plt.close(fig)
+
     def plotar_histograma(self, coluna: str) -> str:
         if coluna not in self.df.columns:
             return f"Erro: '{coluna}' não existe."
         fig, ax = plt.subplots(figsize=(9, 5))
         sns.histplot(self.df[coluna], kde=True, stat="density", linewidth=0, ax=ax)
         ax.set_title(f"Histograma: {coluna}"); ax.grid(True, alpha=0.3)
-        st.pyplot(fig)
+        self._show_and_close(fig)
         self._lembrar("distribuições", f"Histograma exibido para '{coluna}'.")
         self.ultima_coluna = coluna
         return f"Histograma de '{coluna}' exibido."
@@ -366,7 +378,7 @@ class AgenteDeAnalise:
 
         fig.suptitle("Distribuição das variáveis (amostra inicial)", y=1.02)
         plt.tight_layout()
-        st.pyplot(fig)
+        self._show_and_close(fig)
 
         skews = self.df[cols].skew(numeric_only=True).sort_values(ascending=False)
         mais_assim = ", ".join([f"{c}: {v:.2f}" for c, v in skews.head(3).items()])
@@ -447,7 +459,7 @@ class AgenteDeAnalise:
         fig, ax = plt.subplots(figsize=(12, 9))
         sns.heatmap(df_num.corr(method=method), cmap="coolwarm", ax=ax)
         ax.set_title(f"Mapa de calor da correlação ({method})")
-        st.pyplot(fig)
+        self._show_and_close(fig)
         return f"Mapa de correlação ({method}) exibido."
 
     def plotar_dispersao(self, x: str, y: str, hue: str = "", amostra: int = 5000) -> str:
@@ -467,7 +479,7 @@ class AgenteDeAnalise:
         sns.scatterplot(data=df_plot, x=x, y=y, hue=(hue if hue else None), s=20, alpha=0.7, ax=ax, edgecolor=None)
         ax.set_title(f"Dispersão: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         ax.grid(True, linestyle="--", alpha=0.3)
-        st.pyplot(fig)
+        self._show_and_close(fig)
         self._lembrar("dispersão", f"Dispersão exibida: {x} vs {y}" + (f" (hue={hue})" if hue else ""))
         self.ultima_coluna = y
         return "Gráfico de dispersão exibido."
@@ -496,7 +508,8 @@ class AgenteDeAnalise:
         
         g = sns.pairplot(df_plot, vars=cols, hue=hue if hue else None, corner=corner, diag_kind="hist", plot_kws=dict(s=15, alpha=0.7))
         g.fig.suptitle("Matriz de Dispersão (amostrada)", y=1.02)
-        st.pyplot(g.fig)
+        # Renderiza e fecha a figura do pairplot
+        self._show_and_close(g.fig)
         msg = f"Matriz de dispersão gerada para colunas: {cols}" + (f" (hue={hue})." if hue else ".")
         self._lembrar("dispersão", msg)
         return msg
@@ -521,10 +534,9 @@ class AgenteDeAnalise:
             sns.heatmap(tabela, cmap="Blues", ax=ax, annot=annot, fmt=".2f" if normalizar else "d")
             ax.set_title(f"Crosstab: {linhas} x {colunas}" + (" (normalizada)" if normalizar else ""))
             ax.set_xlabel(colunas); ax.set_ylabel(linhas)
-            st.pyplot(fig)
+            self._show_and_close(fig)
             return f"O mapa de calor da tabela cruzada entre '{linhas}' e '{colunas}' foi exibido."
         else:
-            # Retorna a tabela como texto formatado se nenhum gráfico for gerado.
             return f"Tabela Cruzada: {linhas} vs {colunas}\n```text\n{tabela.to_string()}\n```"
 
     def detectar_outliers_iqr(self, coluna: str, plot: bool = False) -> str:
@@ -542,7 +554,9 @@ class AgenteDeAnalise:
         msg = f"Outliers (IQR) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
         if plot:
             fig, ax = plt.subplots(figsize=(8, 1.8))
-            sns.boxplot(x=s, ax=ax); ax.set_title(f"Boxplot {coluna} (IQR)"); st.pyplot(fig)
+            sns.boxplot(x=s, ax=ax)
+            ax.set_title(f"Boxplot {coluna} (IQR)")
+            self._show_and_close(fig)
             msg += " O boxplot foi exibido para visualização."
         self._lembrar("outliers_col", f"'{coluna}': {n_out}/{n} ({pct:.2f}%) fora pelo IQR.")
         self.ultima_coluna = coluna
@@ -566,7 +580,7 @@ class AgenteDeAnalise:
             fig, ax = plt.subplots(figsize=(10, 6))
             sns.histplot(z, kde=True, stat="density", linewidth=0, ax=ax)
             ax.set_title(f"Distribuição de Z-scores - {coluna}")
-            st.pyplot(fig)
+            self._show_and_close(fig)
             msg += " O histograma dos Z-scores foi exibido."
         self._lembrar("outliers_col", f"Z-score '{coluna}': {n_out}/{n} ({pct:.2f}%) com |z|>{threshold}.")
         self.ultima_coluna = coluna
@@ -590,10 +604,8 @@ class AgenteDeAnalise:
         if X.empty:
             return "Após remover valores nulos, não sobraram dados para análise."
 
-        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
         used_contamination = max(1e-4, min(contamination, 0.5))
-        from sklearn.ensemble import IsolationForest
         clf = IsolationForest(contamination=used_contamination, random_state=42)
         labels = clf.fit_predict(Xs)
         n_out = int((labels == -1).sum()); n = int(len(labels)); pct = (n_out / n * 100) if n else 0.0
@@ -660,20 +672,17 @@ class AgenteDeAnalise:
         if X.shape[0] < k:
             return f"Não há dados suficientes ({X.shape[0]} linhas) para criar {k} clusters."
             
-        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
-        from sklearn.cluster import KMeans
         km = KMeans(n_clusters=k, n_init='auto', random_state=42)
         labels = km.fit_predict(Xs)
         sizes = pd.Series(labels).value_counts().sort_index().to_dict()
         
-        from sklearn.decomposition import PCA
         pca = PCA(n_components=2, random_state=42); XY = pca.fit_transform(Xs)
         
         fig, ax = plt.subplots(figsize=(8, 6))
         sns.scatterplot(x=XY[:,0], y=XY[:,1], hue=labels, palette="viridis", legend="full", ax=ax)
         ax.set_title(f"Visualização dos Clusters (K-means, k={k}) via PCA"); ax.set_xlabel("Componente Principal 1"); ax.set_ylabel("Componente Principal 2"); ax.grid(True, alpha=0.3)
-        st.pyplot(fig)
+        self._show_and_close(fig)
         
         resumo = f"Clusterização K-means (k={k}) concluída e o gráfico de visualização foi exibido. Inércia: {km.inertia_:.2f}. Tamanhos dos clusters: {sizes}."
         self._lembrar("clusters", resumo)
@@ -736,16 +745,16 @@ class AgenteDeAnalise:
         series_mean = df_ts[coluna].resample(freq).mean()
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-        ax1.plot(series_sum.index, series_sum.values, label=f"Soma de {coluna}", color="navy")
+        ax1.plot(series_sum.index, series_sum.values, label=f"Soma de {coluna}")
         ax1.set_title(f"Soma de '{coluna}' Agregada por Período ('{freq}')")
         ax1.set_ylabel("Soma Total"); ax1.grid(True, linestyle="--", alpha=0.5)
         
-        ax2.plot(series_mean.index, series_mean.values, label=f"Média de {coluna}", color="darkred")
+        ax2.plot(series_mean.index, series_mean.values, label=f"Média de {coluna}")
         ax2.set_title(f"Média de '{coluna}' Agregada por Período ('{freq}')")
         ax2.set_xlabel("Tempo"); ax2.set_ylabel("Média"); ax2.grid(True, linestyle="--", alpha=0.5)
         
         plt.tight_layout()
-        st.pyplot(fig)
+        self._show_and_close(fig)
         
         return f"Gráfico de tendência temporal para a coluna '{coluna}' com frequência '{freq}' foi exibido."
 
@@ -777,7 +786,7 @@ class AgenteDeAnalise:
 
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
-st.title("Agente EDA — LangChain + Gemini")
+st.title("Agente EDA — LangChain + GPT-5")
 st.caption("Envie um CSV e faça perguntas. O agente gera gráficos e insights. Peça para ele 'resumir a análise' a qualquer momento.")
 
 # --- Lógica de Persistência do Arquivo ---
@@ -887,4 +896,3 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
