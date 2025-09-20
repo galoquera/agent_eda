@@ -9,16 +9,20 @@ python-dotenv==1.0.1
 typing-extensions==4.12.2
 pydantic==2.7.4
 
-# LangChain + LangSmith + Gemini
+# LangChain core + comunity
 langchain==0.2.14
+langchain-community==0.2.12
 langsmith==0.1.81
+
+# Conectores de LLM (ambos)
+langchain-openai==0.1.22
+openai==1.40.6
+
 langchain-google-genai==1.0.6
-# (não fixe google-generativeai; deixe ser puxado pelo conector)
+# deixe o google-generativeai ser instalado transitivamente
 
 # UI
 streamlit==1.36.0
 
-# Evita conflitos com libs Google
+# Evita conflitos com libs Google (recomendado quando Gemini está presente)
 protobuf==4.25.3
-
-langchain-community==0.2.12
