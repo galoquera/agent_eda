@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Agente EDA (Streamlit) — LangChain + Gemini (+ LangSmith opcional)
+- Arquitetura: Tool-Calling (mais direta e eficiente)
+- Modelo: gemini-1.5-flash
 - Upload de CSV genérico (com persistência de arquivo)
 - Pergunta/resposta com ferramentas (gráficos no Streamlit)
 - Memória interna (conclusões), exibida apenas quando o usuário pedir
-- Tools: descrição, histogramas (1 e múltiplos), frequências, moda,
-  correlação, dispersão, crosstab, outliers (IQR/Z-score + resumo dataset),
-  tendências temporais, k-means.
 """
 
 # --- REQUISITOS ---
@@ -24,8 +23,8 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import PromptTemplate
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import StructuredTool
@@ -67,62 +66,37 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro",
+            model="gemini-1.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
 
         tools = self._definir_ferramentas()
 
-        template = """
-Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA).
-Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.
+        # --- Prompt para Agente Tool-Calling ---
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system",
+                 "Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA).\n"
+                 "Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.\n"
+                 "1. Use as ferramentas disponíveis para responder às perguntas. Se uma pergunta pode ser respondida por uma ferramenta, use-a.\n"
+                 "2. Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o.\n"
+                 "3. Após usar uma ferramenta, comente brevemente sobre o resultado, destacando os insights mais importantes.\n"
+                 "4. Se uma pergunta for vaga ou uma coluna não for mencionada, peça esclarecimentos ao usuário."),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+                MessagesPlaceholder("agent_scratchpad"),
+            ]
+        )
 
-**Princípios de Operação:**
-1.  **Ferramentas Primeiro, Sempre:** Sua principal diretriz é usar as ferramentas disponíveis. Se uma pergunta do usuário pode ser respondida por uma ferramenta, você **DEVE** usá-la. Evite responder com conhecimento geral se uma ferramenta pode fornecer uma resposta precisa baseada nos dados.
-2.  **Aja, Não Apenas Descreva:** Execute a análise. Se a pergunta pode ser respondida com um gráfico ou tabela, gere-o. Não descreva apenas o que você faria.
-3.  **Seja Proativo e Conciso:** Após usar uma ferramenta e obter um resultado, comente-o brevemente. Destaque os insights mais importantes e, se apropriado, sugira o próximo passo lógico na análise.
-4.  **Gerencie Ambiguidade:** Se uma pergunta for vaga ou uma coluna específica for necessária mas não for mencionada, peça esclarecimentos ao usuário.
-5.  **Seja Eficiente com Pedidos Amplos:** Para solicitações que envolvem "todas" ou "cada" variável (como 'mostre a distribuição de todas as variáveis'), a ferramenta pode retornar um subconjunto representativo para manter a clareza. Considere a ação como **completa** e resuma os resultados com base no subconjunto exibido, a menos que o usuário peça especificamente por outras colunas.
-6.  **Conclua Sempre:** Após suas `Thought` (reflexões) e `Action` (ações), você **DEVE** fornecer uma resposta final com `Final Answer:`. Se não conseguir encontrar uma resposta exata, sua resposta final deve indicar isso.
-
-**Guia Rápido de Ferramentas:**
-- Para **entender a estrutura** dos dados: `listar_colunas`, `descricao_geral_dados`.
-- Para **medidas resumo** (média, mediana, etc.): `estatisticas_descritivas`.
-- Para visualizar **distribuições**: `plotar_histograma`, `plotar_histogramas_dataset`.
-- Para analisar **relações** entre variáveis: `plotar_mapa_correlacao`, `plotar_dispersao`, `matriz_dispersao`, `tabela_cruzada`.
-- Para encontrar **outliers**: `detectar_outliers_iqr`, `detectar_outliers_zscore`, `resumo_outliers_dataset`.
-
-**Ferramentas Disponíveis:**
-{tools}
-
-Use o seguinte formato de raciocínio:
-
-Question: a pergunta original do usuário que você precisa responder
-Thought: você deve sempre pensar sobre o que fazer para responder à pergunta.
-Action: a ação a ser tomada, que deve ser uma das ferramentas de [{tool_names}]
-Action Input: a entrada para a ação
-Observation: o resultado da ação
-... (este bloco Thought/Action/Action Input/Observation pode se repetir N vezes)
-Thought: Eu agora sei a resposta final.
-Final Answer: a resposta final para a pergunta original do usuário.
-
-Comece!
-
-Histórico da Conversa:
-{chat_history}
-
-Question: {input}
-Thought:{agent_scratchpad}
-"""
-        prompt = PromptTemplate.from_template(template)
-
-        agent = create_react_agent(self.llm, tools, prompt)
+        # --- Criação do Agente Tool-Calling ---
+        agent = create_tool_calling_agent(self.llm, tools, prompt)
+        
         self.executor = AgentExecutor(
             agent=agent,
             tools=tools,
-            verbose=True,  # Mantenha False para produção, True para debug
-            max_iterations=7,
+            verbose=True,
+            max_iterations=5, # Salvaguarda contra loops inesperados
             handle_parsing_errors="Por favor, reformule sua pergunta. Não consegui processar a solicitação.",
         )
 
@@ -315,7 +289,6 @@ Thought:{agent_scratchpad}
         ]
 
     # ---------------- Implementações ----------------
-    # Opção A aplicada: adicionando argumento 'dummy' a tools sem parâmetros
     def listar_colunas(self, dummy: str = "") -> str:
         return f"Colunas: {', '.join(self.df.columns.tolist())}"
 
@@ -768,8 +741,6 @@ Thought:{agent_scratchpad}
             
         return "\n".join(output)
 
-    # A função _preprocessar_pergunta foi removida, pois o modelo gemini-1.5-pro é mais avançado e pode interpretar os pedidos do usuário diretamente.
-
 # ========================= UI Streamlit =========================
 st.set_page_config(page_title="Agente EDA (Streamlit)", layout="wide")
 st.title("Agente EDA — LangChain + Gemini")
@@ -882,7 +853,4 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-
-
 
