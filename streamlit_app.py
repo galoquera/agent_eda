@@ -386,8 +386,22 @@ class AgenteDeAnalise:
                 resumo = f"Valor mais comum: {cont.index[0]} ({int(cont.iloc[0])} ocorrências)."
         if resumo:
             self._lembrar("frequências", f"Em '{coluna}', {resumo}")
+        
         cont_full = s.value_counts()
-        return f"Top {top_n}:\n{cont_full.head(top_n)}\n\nBottom {bottom_n}:\n{cont_full.tail(bottom_n)}"
+        
+        top_df = cont_full.head(top_n).reset_index()
+        top_df.columns = [coluna, 'Contagem']
+        
+        bottom_df = cont_full.tail(bottom_n).reset_index()
+        bottom_df.columns = [coluna, 'Contagem']
+        
+        top_str = top_df.to_string(index=False)
+        bottom_str = bottom_df.to_string(index=False)
+        
+        return (f"**Top {top_n} Mais Frequentes:**\n"
+                f"```text\n{top_str}\n```\n\n"
+                f"**Bottom {bottom_n} Menos Frequentes:**\n"
+                f"```text\n{bottom_str}\n```")
 
     def moda_coluna(self, coluna: str) -> str:
         if coluna not in self.df.columns:
@@ -853,4 +867,5 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
