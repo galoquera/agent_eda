@@ -63,12 +63,15 @@ class AgenteDeAnalise:
         self.ultima_coluna: str | None = None
         self.session_id = session_id
 
-        # LLM: fixo em GPT-5 (sem temperature)
         self.llm = ChatOpenAI(
-            model="gpt-5",
-            api_key=openai_api_key,
+            model='gpt-4o',
+            temperature=0,
+            openai_api_key=openai_api_key,
+            streaming=False,
+            max_retries=6, # Tenta novamente em caso de erro de limite de taxa
+            request_timeout=120 # Aumenta o tempo de espera para evitar erros de conexão
         )
-
+      
         tools = self._definir_ferramentas()
 
         prompt = ChatPromptTemplate.from_messages(
@@ -772,4 +775,5 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
