@@ -310,7 +310,9 @@ class AgenteDeAnalise:
         var_cols = desc.sort_values("std", ascending=False).head(3).index.tolist() if "std" in desc else []
         if var_cols:
             self._lembrar("describe", f"Maior dispersão (std): {', '.join(var_cols)}.")
-        return desc.to_string()
+        
+        desc_str = desc.to_string()
+        return f"```text\n{desc_str}\n```"
 
     def plotar_histograma(self, coluna: str) -> str:
         if coluna not in self.df.columns:
@@ -867,5 +869,6 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
 
