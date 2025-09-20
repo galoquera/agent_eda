@@ -32,7 +32,6 @@ from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 # ---------- LangSmith (opcional) ----------
-# DEV REVIEW: Adicionei uma docstring para explicar a função do LangSmith.
 def _enable_langsmith(project: str = "EDA-Agent"):
     """Ativa o rastreamento com LangSmith se as variáveis de ambiente estiverem configuradas."""
     ls_key = os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")
@@ -75,13 +74,6 @@ class AgenteDeAnalise:
 
         tools = self._definir_ferramentas()
 
-        # --- REVISÃO DE ENGENHARIA DE PROMPT ---
-        # DEV REVIEW: O prompt foi reestruturado para ser mais robusto.
-        # 1. Persona Clara: Define o agente como um "Analista de Dados Sênior".
-        # 2. Princípios de Operação: Fornece regras explícitas de comportamento.
-        #    Isso guia o LLM a priorizar ferramentas e ser proativo.
-        # 3. Guia de Ferramentas: Ajuda o LLM a mapear rapidamente a intenção
-        #    do usuário para a ferramenta correta, melhorando a precisão.
         template = """
 Você é um Analista de Dados Sênior, especialista em Análise Exploratória de Dados (EDA).
 Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecido, de forma proativa e eficiente.
@@ -128,7 +120,7 @@ Thought:{agent_scratchpad}
         self.executor = AgentExecutor(
             agent=agent,
             tools=tools,
-            verbose=True, # Mantenha False para produção, True para debug
+            verbose=True,  # Mantenha False para produção, True para debug
             max_iterations=5,
             handle_parsing_errors="Por favor, reformule sua pergunta. Não consegui processar a solicitação.",
         )
@@ -227,8 +219,6 @@ Thought:{agent_scratchpad}
             coluna: str = Field(description="A coluna numérica a ser analisada (ex.: 'Amount').")
             freq: str = Field(default="D", description="A frequência de reamostragem: 'H' (hora), 'D' (dia), 'W' (semana), 'M' (mês).")
 
-        # DEV REVIEW: As descrições das ferramentas foram aprimoradas para incluir exemplos de uso,
-        # tornando mais fácil para o LLM escolher a ferramenta correta.
         return [
             StructuredTool.from_function(
                 self.listar_colunas, name="listar_colunas",
@@ -324,13 +314,11 @@ Thought:{agent_scratchpad}
         ]
 
     # ---------------- Implementações ----------------
-    # DEV REVIEW: O código de implementação das ferramentas está bem escrito e foi mantido.
-
-    # Opção A aplicada: adicionando argumento dummy _unused a tools sem parâmetros
-    def listar_colunas(self, _unused: str = "") -> str:
+    # Opção A aplicada: adicionando argumento 'dummy' a tools sem parâmetros
+    def listar_colunas(self, dummy: str = "") -> str:
         return f"Colunas: {', '.join(self.df.columns.tolist())}"
 
-    def obter_descricao_geral(self, _unused: str = "") -> str:
+    def obter_descricao_geral(self, dummy: str = "") -> str:
         buffer = io.StringIO()
         self.df.info(buf=buffer)
         linhas, colunas = self.df.shape
@@ -343,7 +331,7 @@ Thought:{agent_scratchpad}
                       f"Colunas com mais nulos: {top_nulls}.")
         return f"{linhas} linhas x {colunas} colunas\n\n{buffer.getvalue()}"
 
-    def obter_estatisticas_descritivas(self, _unused: str = "") -> str:
+    def obter_estatisticas_descritivas(self, dummy: str = "") -> str:
         desc = self.df.describe().T
         var_cols = desc.sort_values("std", ascending=False).head(3).index.tolist() if "std" in desc else []
         if var_cols:
@@ -362,7 +350,7 @@ Thought:{agent_scratchpad}
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                     cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                   cols_por_linha: int = 3, max_colunas: int = 12) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -676,7 +664,7 @@ Thought:{agent_scratchpad}
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                         nova_coluna: str = "", criar_features: bool = True) -> str:
+                                     nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada no dataset."
@@ -745,7 +733,7 @@ Thought:{agent_scratchpad}
         
         return f"Gráfico de tendência temporal para a coluna '{coluna}' com frequência '{freq}' foi exibido."
 
-    def mostrar_conclusoes(self, _unused: str = "") -> str:
+    def mostrar_conclusoes(self, dummy: str = "") -> str:
         if not self.memoria_analises:
             return "Nenhuma conclusão foi registrada na memória ainda."
         
@@ -767,15 +755,12 @@ Thought:{agent_scratchpad}
             output.append(f"**{chave}**")
             for texto in textos:
                 output.append(f"- {texto}")
-            output.append("") # Linha em branco para espaçamento
+            output.append("")  # Linha em branco para espaçamento
             
         return "\n".join(output)
 
     # Pré-processador: ajuda com pedidos amplos
     def _preprocessar_pergunta(self, pergunta: str) -> str:
-        # DEV REVIEW: A lógica de pré-processamento foi mantida por ser um atalho útil,
-        # mas em um sistema de produção, poderia ser substituída por uma chamada de LLM
-        # para classificação de intenção, tornando-a mais flexível.
         t = pergunta.strip()
         if t in self.df.columns:
             self.ultima_coluna = t
@@ -812,7 +797,6 @@ if not st.session_state.csv_path:
             st.session_state.csv_path = os.path.join(DATA_DIR, csv_files[0])
     except Exception as e:
         st.warning(f"Não foi possível ler o diretório de dados: {e}")
-
 
 with st.sidebar:
     st.subheader("Configuração do Dataset")
@@ -894,12 +878,10 @@ else:
                     st.markdown(response_content)
                     st.session_state.messages.append({"role": "assistant", "content": response_content})
                 except StopIteration:
-                    # DEV REVIEW: Captura o erro específico e fornece feedback útil.
                     error_message = "O agente não conseguiu chegar a uma conclusão. Tente reformular sua pergunta de uma maneira mais direta."
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
                 except Exception as e:
-                    # DEV REVIEW: Tratamento de erro mais explícito para o usuário.
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
