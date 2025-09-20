@@ -325,10 +325,12 @@ Thought:{agent_scratchpad}
 
     # ---------------- Implementações ----------------
     # DEV REVIEW: O código de implementação das ferramentas está bem escrito e foi mantido.
-    def listar_colunas(self) -> str:
+
+    # Opção A aplicada: adicionando argumento dummy _unused a tools sem parâmetros
+    def listar_colunas(self, _unused: str = "") -> str:
         return f"Colunas: {', '.join(self.df.columns.tolist())}"
 
-    def obter_descricao_geral(self) -> str:
+    def obter_descricao_geral(self, _unused: str = "") -> str:
         buffer = io.StringIO()
         self.df.info(buf=buffer)
         linhas, colunas = self.df.shape
@@ -341,7 +343,7 @@ Thought:{agent_scratchpad}
                       f"Colunas com mais nulos: {top_nulls}.")
         return f"{linhas} linhas x {colunas} colunas\n\n{buffer.getvalue()}"
 
-    def obter_estatisticas_descritivas(self) -> str:
+    def obter_estatisticas_descritivas(self, _unused: str = "") -> str:
         desc = self.df.describe().T
         var_cols = desc.sort_values("std", ascending=False).head(3).index.tolist() if "std" in desc else []
         if var_cols:
@@ -584,8 +586,10 @@ Thought:{agent_scratchpad}
         if X.empty:
             return "Após remover valores nulos, não sobraram dados para análise."
 
+        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
         used_contamination = max(1e-4, min(contamination, 0.5))
+        from sklearn.ensemble import IsolationForest
         clf = IsolationForest(contamination=used_contamination, random_state=42)
         labels = clf.fit_predict(Xs)
         n_out = int((labels == -1).sum()); n = int(len(labels)); pct = (n_out / n * 100) if n else 0.0
@@ -652,11 +656,14 @@ Thought:{agent_scratchpad}
         if X.shape[0] < k:
             return f"Não há dados suficientes ({X.shape[0]} linhas) para criar {k} clusters."
             
+        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler(); Xs = scaler.fit_transform(X)
+        from sklearn.cluster import KMeans
         km = KMeans(n_clusters=k, n_init='auto', random_state=42)
         labels = km.fit_predict(Xs)
         sizes = pd.Series(labels).value_counts().sort_index().to_dict()
         
+        from sklearn.decomposition import PCA
         pca = PCA(n_components=2, random_state=42); XY = pca.fit_transform(Xs)
         
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -738,7 +745,7 @@ Thought:{agent_scratchpad}
         
         return f"Gráfico de tendência temporal para a coluna '{coluna}' com frequência '{freq}' foi exibido."
 
-    def mostrar_conclusoes(self) -> str:
+    def mostrar_conclusoes(self, _unused: str = "") -> str:
         if not self.memoria_analises:
             return "Nenhuma conclusão foi registrada na memória ainda."
         
@@ -896,7 +903,3 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-
-
-
