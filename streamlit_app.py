@@ -85,6 +85,7 @@ Sua missão é ajudar o usuário a extrair insights valiosos do dataset fornecid
 4.  **Gerencie Ambiguidade:** Se uma pergunta for vaga ou uma coluna específica for necessária mas não for mencionada, peça esclarecimentos ao usuário.
 5.  **Seja Eficiente com Pedidos Amplos:** Para solicitações que envolvem "todas" ou "cada" variável (como 'mostre a distribuição de todas as variáveis'), a ferramenta pode retornar um subconjunto representativo para manter a clareza. Considere a ação como **completa** e resuma os resultados com base no subconjunto exibido, a menos que o usuário peça especificamente por outras colunas.
 6.  **Conclua Sempre:** Após suas `Thought` (reflexões) e `Action` (ações), você **DEVE** fornecer uma resposta final com `Final Answer:`. Se não conseguir encontrar uma resposta exata, sua resposta final deve indicar isso.
+7.  **Evite Loops:** Para um único pedido do usuário, você **NÃO DEVE** chamar a mesma ferramenta de plotagem (como `plotar_histogramas_dataset` ou `matriz_dispersao`) repetidamente em uma sequência. Uma única execução que mostra um subconjunto de dados é a resposta completa e final para um pedido amplo.
 
 **Guia Rápido de Ferramentas:**
 - Para **entender a estrutura** dos dados: `listar_colunas`, `descricao_geral_dados`.
@@ -901,4 +902,5 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
