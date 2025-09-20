@@ -88,9 +88,9 @@ class AgenteDeAnalise:
                  "   - Após exibir a saída da ferramenta, adicione sua análise ou insights em um parágrafo separado.\n\n"
                  "**EXEMPLO DE RESPOSTA CORRETA:**\n"
                  "```text\n"
-                 "           count      mean       std  min\n"
-                 "Time      46.000000  17.065217  7.513809  0.0\n"
-                 "V1        46.000000  -0.082728  1.425916 -2.3\n"
+                 "              count      mean       std   min\n"
+                 "Time       46.000000  17.065217  7.513809   0.0\n"
+                 "V1         46.000000  -0.082728  1.425916  -2.3\n"
                  "```\n\n"
                  "Esta tabela apresenta as estatísticas descritivas das variáveis. A coluna 'Amount' possui a maior dispersão, enquanto a coluna 'Class' não apresenta variabilidade neste subconjunto.\n"
                 ),
@@ -312,8 +312,8 @@ class AgenteDeAnalise:
         null_pct = (self.df.isna().mean() * 100).round(2).sort_values(ascending=False)
         top_nulls = ", ".join([f"{c}: {p}%" for c, p in null_pct.head(3).items()]) if not null_pct.empty else "sem nulos"
         self._lembrar("descrição",
-                      f"Dataset com {linhas} linhas, {colunas} colunas ({n_num} numéricas, {n_cat} categóricas). "
-                      f"Colunas com mais nulos: {top_nulls}.")
+                        f"Dataset com {linhas} linhas, {colunas} colunas ({n_num} numéricas, {n_cat} categóricas). "
+                        f"Colunas com mais nulos: {top_nulls}.")
         return f"{linhas} linhas x {colunas} colunas\n\n{buffer.getvalue()}"
 
     def obter_estatisticas_descritivas(self, dummy: str = "") -> str:
@@ -337,7 +337,7 @@ class AgenteDeAnalise:
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                  cols_por_linha: int = 2, max_colunas: int = 4) -> str:
+                                   cols_por_linha: int = 2, max_colunas: int = 4) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -513,16 +513,19 @@ class AgenteDeAnalise:
         
         tabela = (ct / ct.values.sum()) if normalizar else ct
         
+        self._lembrar("crosstab", f"Crosstab gerada: {linhas} x {colunas}.")
+        self.ultima_coluna = colunas
+
         if heatmap:
             fig, ax = plt.subplots(figsize=(max(6, 0.4 * len(tabela.columns)), max(4, 0.4 * len(tabela.index))))
             sns.heatmap(tabela, cmap="Blues", ax=ax, annot=annot, fmt=".2f" if normalizar else "d")
             ax.set_title(f"Crosstab: {linhas} x {colunas}" + (" (normalizada)" if normalizar else ""))
             ax.set_xlabel(colunas); ax.set_ylabel(linhas)
             st.pyplot(fig)
-            
-        self._lembrar("crosstab", f"Crosstab gerada: {linhas} x {colunas}.")
-        self.ultima_coluna = colunas
-        return "Tabela cruzada exibida."
+            return f"O mapa de calor da tabela cruzada entre '{linhas}' e '{colunas}' foi exibido."
+        else:
+            # Retorna a tabela como texto formatado se nenhum gráfico for gerado.
+            return f"Tabela Cruzada: {linhas} vs {colunas}\n```text\n{tabela.to_string()}\n```"
 
     def detectar_outliers_iqr(self, coluna: str, plot: bool = False) -> str:
         if coluna not in self.df.columns:
@@ -536,12 +539,14 @@ class AgenteDeAnalise:
         mask = (s < low) | (s > high)
         n_out, n = int(mask.sum()), int(s.shape[0])
         pct = (n_out / n * 100) if n else 0.0
+        msg = f"Outliers (IQR) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
         if plot:
             fig, ax = plt.subplots(figsize=(8, 1.8))
             sns.boxplot(x=s, ax=ax); ax.set_title(f"Boxplot {coluna} (IQR)"); st.pyplot(fig)
+            msg += " O boxplot foi exibido para visualização."
         self._lembrar("outliers_col", f"'{coluna}': {n_out}/{n} ({pct:.2f}%) fora pelo IQR.")
         self.ultima_coluna = coluna
-        return f"Outliers (IQR) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
+        return msg
 
     def detectar_outliers_zscore(self, coluna: str, threshold: float = 3.0, plot: bool = False) -> str:
         if coluna not in self.df.columns:
@@ -556,14 +561,16 @@ class AgenteDeAnalise:
         mask = z.abs() > threshold
         n_out, n = int(mask.sum()), int(s.shape[0])
         pct = (n_out / n * 100) if n else 0.0
+        msg = f"Outliers (Z>|{threshold}|) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
         if plot:
             fig, ax = plt.subplots(figsize=(10, 6))
             sns.histplot(z, kde=True, stat="density", linewidth=0, ax=ax)
             ax.set_title(f"Distribuição de Z-scores - {coluna}")
             st.pyplot(fig)
+            msg += " O histograma dos Z-scores foi exibido."
         self._lembrar("outliers_col", f"Z-score '{coluna}': {n_out}/{n} ({pct:.2f}%) com |z|>{threshold}.")
         self.ultima_coluna = coluna
-        return f"Outliers (Z>|{threshold}|) em '{coluna}': {n_out}/{n} = {pct:.3f}%."
+        return msg
         
     def detectar_outliers_isolation_forest(self, colunas: str = "", contamination: float = 0.01) -> str:
         try:
@@ -668,12 +675,12 @@ class AgenteDeAnalise:
         ax.set_title(f"Visualização dos Clusters (K-means, k={k}) via PCA"); ax.set_xlabel("Componente Principal 1"); ax.set_ylabel("Componente Principal 2"); ax.grid(True, alpha=0.3)
         st.pyplot(fig)
         
-        resumo = f"Clusterização K-means (k={k}) concluída. Inércia: {km.inertia_:.2f}. Tamanhos dos clusters: {sizes}."
+        resumo = f"Clusterização K-means (k={k}) concluída e o gráfico de visualização foi exibido. Inércia: {km.inertia_:.2f}. Tamanhos dos clusters: {sizes}."
         self._lembrar("clusters", resumo)
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                      nova_coluna: str = "", criar_features: bool = True) -> str:
+                                     nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada no dataset."
@@ -831,7 +838,7 @@ if "agente" not in st.session_state or st.session_state.agente is None:
         with st.spinner(f"Carregando '{os.path.basename(st.session_state.csv_path)}' e inicializando o agente..."):
             try:
                 if "chat_history_store" not in st.session_state:
-                     st.session_state.chat_history_store = {}
+                        st.session_state.chat_history_store = {}
                 
                 st.session_state.agente = AgenteDeAnalise(
                     caminho_arquivo_csv=st.session_state.csv_path,
@@ -880,8 +887,4 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-
-
-
 
