@@ -128,7 +128,7 @@ Thought:{agent_scratchpad}
         self.executor = AgentExecutor(
             agent=agent,
             tools=tools,
-            verbose=False, # Mantenha False para produção, True para debug
+            verbose=True, # Mantenha False para produção, True para debug
             max_iterations=5,
             handle_parsing_errors="Por favor, reformule sua pergunta. Não consegui processar a solicitação.",
         )
@@ -896,5 +896,6 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
 
