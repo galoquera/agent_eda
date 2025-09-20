@@ -67,7 +67,7 @@ class AgenteDeAnalise:
         self.session_id = session_id
 
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             temperature=0,
             google_api_key=google_api_key,
         )
@@ -350,13 +350,15 @@ Thought:{agent_scratchpad}
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                   cols_por_linha: int = 3, max_colunas: int = 12) -> str:
+                                  cols_por_linha: int = 3, max_colunas: int = 12) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
             cols = self.df.select_dtypes(include="number").columns.tolist()
         if not cols:
             return "Não há colunas válidas para histograma."
+        
+        total_cols_disponiveis = len(cols)
         cols = cols[:max_colunas]
         n = len(cols)
         linhas = (n + cols_por_linha - 1) // cols_por_linha
@@ -384,7 +386,12 @@ Thought:{agent_scratchpad}
         menos_assim = ", ".join([f"{c}: {v:.2f}" for c, v in skews.tail(3).items()])
         self._lembrar("distribuições", f"Maior assimetria positiva: {mais_assim}. Negativa: {menos_assim}.")
         self.ultima_coluna = cols[0]
-        return f"Histogramas gerados para: {', '.join(cols)}."
+        
+        if total_cols_disponiveis > max_colunas:
+            return (f"Histogramas gerados para as primeiras {len(cols)} de {total_cols_disponiveis} colunas numéricas "
+                    f"para manter a clareza. Especifique colunas se desejar ver outras.")
+        else:
+            return f"Histogramas gerados para: {', '.join(cols)}."
 
     def frequencias_coluna(self, coluna: str, top_n: int = 10, bottom_n: int = 10) -> str:
         if coluna not in self.df.columns:
@@ -664,7 +671,7 @@ Thought:{agent_scratchpad}
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                     nova_coluna: str = "", criar_features: bool = True) -> str:
+                                      nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada no dataset."
@@ -768,7 +775,7 @@ Thought:{agent_scratchpad}
         
         low = t.lower()
         if "mostrar conclus" in low or "quais as conclus" in low or "resuma a análise" in low:
-              return "Use a ferramenta `mostrar_conclusoes` para listar as conclusões da memória."
+            return "Use a ferramenta `mostrar_conclusoes` para listar as conclusões da memória."
 
         return pergunta
 
@@ -885,3 +892,5 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
+
