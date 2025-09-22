@@ -194,7 +194,7 @@ class AgenteDeAnalise:
 
         class TendenciasInput(BaseModel):
             coluna: str = Field(description="Coluna numérica para tendência.")
-            freq: str = Field(default="D", description="H|D|W|M")
+            freq: str = Field(default="H", description="H|D|W|M")
 
         return [
             StructuredTool.from_function(self.listar_colunas, name="listar_colunas",
@@ -657,7 +657,7 @@ class AgenteDeAnalise:
         self._lembrar("tempo", msg)
         return msg
 
-    def tendencias_temporais(self, coluna: str, freq: str = "D") -> str:
+    def tendencias_temporais(self, coluna: str, freq: str = "H") -> str:
         if coluna not in self.df.columns:
             return f"Erro: a coluna '{coluna}' não existe."
         if not pd.api.types.is_numeric_dtype(self.df[coluna]):
@@ -819,4 +819,5 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
 
