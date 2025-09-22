@@ -71,7 +71,7 @@ class AgenteDeAnalise:
             max_retries=6, # Tenta novamente em caso de erro de limite de taxa
             request_timeout=120 # Aumenta o tempo de espera para evitar erros de conexão
         )
-      
+        
         tools = self._definir_ferramentas()
 
         prompt = ChatPromptTemplate.from_messages(
@@ -85,7 +85,8 @@ class AgenteDeAnalise:
                  "3) Formato da resposta:\n"
                  "   - Se uma ferramenta retornar tabela/texto, a resposta deve começar com a saída EXATA da ferramenta.\n"
                  "   - Não descreva a tabela antes; apenas exiba-a.\n"
-                 "   - Depois, adicione seus insights em parágrafo separado.\n\n"
+                 "   - Depois, adicione seus insights em parágrafo separado.\n"
+                 "4) ANÁLISE TEMPORAL: Se precisar de uma data de início (âncora temporal ou 'origem') para analisar a coluna 'Time', PEÇA AO USUÁRIO por uma data de referência (ex: 'Considere o início em 2024-01-01'). Não presuma uma data.\n\n"
                  "Exemplo de saída de tabela em bloco ```text ... ``` seguido de análise."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
@@ -249,8 +250,8 @@ class AgenteDeAnalise:
         null_pct = (self.df.isna().mean() * 100).round(2).sort_values(ascending=False)
         top_nulls = ", ".join([f"{c}: {p}%" for c, p in null_pct.head(3).items()]) if not null_pct.empty else "sem nulos"
         self._lembrar("descrição",
-                      f"Dataset com {linhas} linhas, {colunas} colunas ({n_num} numéricas, {n_cat} categóricas). "
-                      f"Colunas com mais nulos: {top_nulls}.")
+                       f"Dataset com {linhas} linhas, {colunas} colunas ({n_num} numéricas, {n_cat} categóricas). "
+                       f"Colunas com mais nulos: {top_nulls}.")
         return f"{linhas} linhas x {colunas} colunas\n\n{buffer.getvalue()}"
 
     def obter_estatisticas_descritivas(self, dummy: str = "") -> str:
@@ -278,7 +279,7 @@ class AgenteDeAnalise:
         return f"Histograma de '{coluna}' exibido."
 
     def plotar_histogramas_dataset(self, colunas: str = "", kde: bool = True, bins: int = 30,
-                                   cols_por_linha: int = 2, max_colunas: int = 4) -> str:
+                                     cols_por_linha: int = 2, max_colunas: int = 4) -> str:
         if colunas.strip():
             cols = [c.strip() for c in colunas.split(",") if c.strip() and c in self.df.columns]
         else:
@@ -577,7 +578,7 @@ class AgenteDeAnalise:
         media_pct = sum(p for _, p, _, _ in linhas) / len(linhas) if linhas else 0
         self._lembrar("outliers_ds",
                       "Top outliers ({}): {}. Média geral: {:.2f}%."
-                      .format(method.UPPER(),
+                      .format(method.upper(),
                               ", ".join([f"{c} ({p:.2f}%)" for c, p, _, _ in top[:3]]),
                               media_pct))
         partes = [f"Resumo de outliers por {method.upper()} (top {len(top)} colunas):"]
@@ -623,7 +624,7 @@ class AgenteDeAnalise:
         return resumo
 
     def converter_time_para_datetime(self, origem: str = "", unidade: str = "s",
-                                     nova_coluna: str = "", criar_features: bool = True) -> str:
+                                       nova_coluna: str = "", criar_features: bool = True) -> str:
         col = "Time"
         if col not in self.df.columns:
             return "Erro: coluna 'Time' não encontrada no dataset."
@@ -661,24 +662,37 @@ class AgenteDeAnalise:
             return f"Erro: a coluna '{coluna}' não existe."
         if not pd.api.types.is_numeric_dtype(self.df[coluna]):
             return f"Erro: a coluna '{coluna}' deve ser numérica."
+        
+        # Lógica de verificação aprimorada
         ts_col = next((c for c in self.df.columns if pd.api.types.is_datetime64_any_dtype(self.df[c])), None)
         if not ts_col:
-            return "Erro: Nenhuma coluna de data/hora encontrada. Use `converter_time_para_datetime` primeiro."
+            td_col = next((c for c in self.df.columns if pd.api.types.is_timedelta64_dtype(self.df[c])), None)
+            if td_col:
+                return (f"Erro: A coluna de tempo '{td_col}' representa uma duração (Timedelta), não uma data/hora absoluta. "
+                        "Para analisar tendências, é necessária uma âncora temporal. "
+                        f"Use a ferramenta `converter_time_para_datetime` com o parâmetro `origem` (ex: origem='2024-01-01 00:00:00') para criar uma coluna de data/hora absoluta.")
+            else:
+                return "Erro: Nenhuma coluna de data/hora encontrada. Use `converter_time_para_datetime` primeiro."
+
         df_ts = self.df[[ts_col, coluna]].dropna().set_index(ts_col)
         if df_ts.empty:
             return "Não há dados suficientes para analisar a tendência."
+        
         series_sum = df_ts[coluna].resample(freq).sum()
         series_mean = df_ts[coluna].resample(freq).mean()
+        
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
         ax1.plot(series_sum.index, series_sum.values, label=f"Soma de {coluna}")
         ax1.set_title(f"Soma de '{coluna}' agregada por período ('{freq}')")
         ax1.set_ylabel("Soma Total")
         ax1.grid(True, linestyle="--", alpha=0.5)
+        
         ax2.plot(series_mean.index, series_mean.values, label=f"Média de {coluna}")
         ax2.set_title(f"Média de '{coluna}' agregada por período ('{freq}')")
         ax2.set_xlabel("Tempo")
         ax2.set_ylabel("Média")
         ax2.grid(True, linestyle="--", alpha=0.5)
+        
         plt.tight_layout()
         self._show_and_close(fig)
         return f"Gráfico de tendência temporal para '{coluna}' (freq='{freq}') exibido."
@@ -694,6 +708,7 @@ class AgenteDeAnalise:
                 blocos.setdefault(chave, []).append(texto)
             except ValueError:
                 blocos.setdefault("Geral", []).append(item)
+        
         output = ["### Resumo das Análises\n"]
         for chave, textos in blocos.items():
             output.append(f"**{chave}**")
@@ -804,3 +819,4 @@ else:
                     error_message = f"Ocorreu um erro inesperado: {str(e)}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
+
